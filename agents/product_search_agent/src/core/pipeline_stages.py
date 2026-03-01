@@ -6,6 +6,7 @@ of the product search pipeline in the concurrent processing system.
 """
 
 import asyncio
+import os
 from typing import List, Optional
 
 from shared.logging import setup_logger
@@ -17,6 +18,7 @@ from .product_page_candidate_identifier import ProductPageCandidateIdentifierAge
 from .price_extractor import PriceExtractorAgent
 from .category_expansion_agent import CategoryExpansionAgent
 from .geo_url_validator_agent import GeoUrlValidatorAgent
+from .relevance_scorer import RelevanceScorer
 from src.api.models import BraveSearchResult, ExtractedUrlInfo, IdentifiedPageCandidate, ProductWithPrice
 
 logger = setup_logger("pipeline_stages")
@@ -37,6 +39,7 @@ class PipelineStageProcessors:
         self.page_identifier = ProductPageCandidateIdentifierAgent()
         self.price_extractor = PriceExtractorAgent()
         self.category_expander = CategoryExpansionAgent()
+        self.relevance_scorer = RelevanceScorer()
         
         logger.info("Pipeline stage processors initialized")
     
@@ -120,7 +123,8 @@ class PipelineStageProcessors:
                     logger.info(f"URL geo-validation reduced candidates from {len(extracted_urls)} to {len(filtered_urls)}")
                     extracted_urls = filtered_urls
                 else:
-                    logger.warning(f"No {country}-relevant URLs found, using original results as fallback")
+                    logger.warning(f"No {country}-relevant URLs found, filtering all candidates")
+                    extracted_urls = []
             
             logger.info(f"Stage 2 complete for job {job.job_id}: {len(extracted_urls)} URLs after geo-filtering")
             return extracted_urls
@@ -196,6 +200,38 @@ class PipelineStageProcessors:
                 if page.page_type == "PRODUCT"
             ]
             
+            if product_only_pages:
+                max_candidates = int(os.getenv("MAX_PRODUCT_CANDIDATES_FOR_PRICE", "10"))
+                min_relevance = float(os.getenv("MIN_RELEVANCE_SCORE", "0.2"))
+                scored_candidates = []
+                for candidate in product_only_pages:
+                    scores = await self.relevance_scorer.score_candidate(
+                        product_query=job.request.query,
+                        url=candidate.url,
+                        title=candidate.original_title,
+                        snippet=candidate.original_snippet,
+                    )
+                    scored_candidates.append(candidate.model_copy(update=scores))
+
+                scored_candidates.sort(key=lambda c: c.combined_score or 0.0, reverse=True)
+                filtered_candidates = [
+                    c for c in scored_candidates
+                    if (c.relevance_score or 0.0) >= min_relevance
+                ]
+                if not filtered_candidates:
+                    filtered_candidates = scored_candidates
+                    logger.info(
+                        "Relevance gate kept no candidates above threshold; "
+                        f"falling back to top-ranked list (cap={max_candidates})."
+                    )
+                product_only_pages = filtered_candidates[:max_candidates]
+                logger.info(
+                    "Relevance gate kept top %d candidates (cap=%d, min_relevance=%.2f)",
+                    len(product_only_pages),
+                    max_candidates,
+                    min_relevance,
+                )
+
             logger.info(f"Stage 3 complete for job {job.job_id}: {len(product_only_pages)} PRODUCT pages (filtered from {len(identified_pages)} total identified)")
             return product_only_pages
             

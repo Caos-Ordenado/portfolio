@@ -49,6 +49,12 @@ class IdentifiedPageCandidate(BaseModel):
     reasoning: Optional[str] = None # Simplified and made optional
     identified_product_name: Optional[str] = None # For PRODUCT type
     category_name: Optional[str] = None # For CATEGORY type
+    relevance_score: Optional[float] = None
+    location_score: Optional[float] = None
+    combined_score: Optional[float] = None
+    relevance_score: Optional[float] = None
+    location_score: Optional[float] = None
+    combined_score: Optional[float] = None
     # Removed confidence, analysis_details
 
 # QueryValidationDetail is no longer directly exposed in the final API response

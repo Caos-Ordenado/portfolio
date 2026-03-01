@@ -1,14 +1,19 @@
 import asyncio
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import re
 import httpx # For potential errors from OllamaClient
+import os
+import hashlib
+from urllib.parse import urlparse
 
 from shared.logging import setup_logger
 from shared.ollama_client import OllamaClient
+from shared.redis_client import RedisClient
 from shared.utils import strip_json_code_block, remove_json_comments, extract_fields_from_partial_json
 from src.api.models import ExtractedUrlInfo, IdentifiedPageCandidate
 from src.core.utils import is_mercadolibre_listing_url, is_mercadolibre_product_url
+from src.core.utils.ecommerce_url_utils import URUGUAY_TLDS
 
 logger = setup_logger("product_page_candidate_identifier")
 
@@ -17,6 +22,8 @@ class ProductPageCandidateIdentifierAgent:
     def __init__(self, model_name="qwen3:latest", temperature=0.1):
         self.model_name = model_name
         self.temperature = temperature
+        self.page_type_cache_enabled = os.getenv("PAGE_TYPE_CACHE_ENABLED", "true").lower() == "true"
+        self.page_type_cache_ttl_seconds = int(os.getenv("PAGE_TYPE_CACHE_TTL_SECONDS", "21600"))  # 6 hours
         logger.info(f"ProductPageCandidateIdentifierAgent initialized with model: {model_name}, temp: {temperature}")
 
     async def __aenter__(self):
@@ -26,13 +33,72 @@ class ProductPageCandidateIdentifierAgent:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         logger.debug("ProductPageCandidateIdentifierAgent context exited")
 
+    def _is_uruguay_url(self, url: str) -> bool:
+        if not url:
+            return False
+        try:
+            parsed = urlparse(url.lower())
+            domain = parsed.netloc
+            path_and_query = f"{parsed.path}?{parsed.query}"
+            if any(domain.endswith(tld) for tld in URUGUAY_TLDS):
+                return True
+            if "uruguay" in domain or "uruguay" in path_and_query:
+                return True
+            if "/uy/" in path_and_query or "montevideo" in path_and_query:
+                return True
+        except Exception:
+            return False
+        return False
+
+    def _page_type_cache_key(self, url: str, product_name: str) -> str:
+        raw = f"{url}|{product_name}".encode("utf-8")
+        digest = hashlib.sha256(raw).hexdigest()
+        return f"page_type:{digest}"
+
+    async def _get_cached_page_type(self, url: str, product_name: str) -> Optional[Dict[str, Any]]:
+        try:
+            async with RedisClient() as redis_client:
+                if not await redis_client.health_check():
+                    return None
+                value = await redis_client.get(self._page_type_cache_key(url, product_name))
+                if not value:
+                    return None
+                return json.loads(value)
+        except Exception:
+            return None
+
+    async def _set_cached_page_type(self, url: str, product_name: str, payload: Dict[str, Any]) -> None:
+        try:
+            async with RedisClient() as redis_client:
+                if not await redis_client.health_check():
+                    return
+                await redis_client.set(
+                    self._page_type_cache_key(url, product_name),
+                    payload,
+                    ex=self.page_type_cache_ttl_seconds,
+                )
+        except Exception:
+            return
+
     async def _classify_url_with_llm(self, url_info: ExtractedUrlInfo, product_name: str) -> IdentifiedPageCandidate:
         # Deterministic MercadoLibre overrides (no prompt changes):
         # - listado.* is a listing/search page -> CATEGORY
         # - articulo.* and /p/MLU... are PRODUCT
         try:
+            if not self._is_uruguay_url(url_info.url):
+                candidate = IdentifiedPageCandidate(
+                    url=url_info.url,
+                    original_title=url_info.title,
+                    original_snippet=url_info.snippet,
+                    source_query=url_info.source_query,
+                    page_type="EXCLUDE_NON_URUGUAY",
+                    reasoning="Deterministic exclusion: URL is not Uruguay-relevant.",
+                )
+                if self.page_type_cache_enabled:
+                    await self._set_cached_page_type(url_info.url, product_name, candidate.model_dump())
+                return candidate
             if is_mercadolibre_listing_url(url_info.url):
-                return IdentifiedPageCandidate(
+                candidate = IdentifiedPageCandidate(
                     url=url_info.url,
                     original_title=url_info.title,
                     original_snippet=url_info.snippet,
@@ -41,8 +107,11 @@ class ProductPageCandidateIdentifierAgent:
                     category_name="MercadoLibre listing",
                     reasoning="Deterministic override: MercadoLibre listing/search page.",
                 )
+                if self.page_type_cache_enabled:
+                    await self._set_cached_page_type(url_info.url, product_name, candidate.model_dump())
+                return candidate
             if is_mercadolibre_product_url(url_info.url):
-                return IdentifiedPageCandidate(
+                candidate = IdentifiedPageCandidate(
                     url=url_info.url,
                     original_title=url_info.title,
                     original_snippet=url_info.snippet,
@@ -51,35 +120,21 @@ class ProductPageCandidateIdentifierAgent:
                     identified_product_name=(url_info.title or product_name),
                     reasoning="Deterministic override: MercadoLibre product URL pattern.",
                 )
+                if self.page_type_cache_enabled:
+                    await self._set_cached_page_type(url_info.url, product_name, candidate.model_dump())
+                return candidate
         except Exception:
             # If URL parsing fails for any reason, fall back to LLM path.
             pass
 
+        if self.page_type_cache_enabled:
+            cached = await self._get_cached_page_type(url_info.url, product_name)
+            if cached:
+                return IdentifiedPageCandidate(**cached)
+
         system_prompt = f"""
 You are an AI assistant that analyzes web page content (title, URL, and a snippet of text) to determine if it's a product page, a category page, a blog post, or 'other'.
 You are also given the original product name the user is searching for: "{product_name}"
-
-IMPORTANT GEOGRAPHIC FILTERING REQUIREMENTS:
-- Only consider results for Uruguay.
-- Exclude any URL where the domain ends with a country code that is not .uy (e.g., .ar, .es, .pt, .cl, .mx, .br, etc.)
-- If the domain is .com, .net, .org, etc. (no country code), only accept if the URL path or domain contains 'uruguay', '/uy/', or another clear Uruguay indicator like Montevideo.
-- If the URL does not have any Uruguay indicator, EXCLUDE it.
-- Only classify as PRODUCT, CATEGORY, BLOG, or OTHER if the URL passes these Uruguay checks; otherwise, return page_type: 'EXCLUDE_NON_URUGUAY'.
-- Never include or classify non-Uruguay results, even if the product matches.
-
-Examples:
-VALID:
-- https://www.climasyviajes.com/clima/uruguay  (contains 'uruguay' in the path)
-- https://www.compracompras.com/uy/lista/202381/pegamentos/  (contains '/uy/' in the path)
-- https://paraguas.com.uy/producto/paraguas-vicenzo-windproof/ (domain ends with .uy)
-INVALID:
-- https://www.montagne.com.ar/categoria/12-camperas-de-hombre (.ar domain)
-- https://www.decathlon.es/es/colecciones/calzado-impermeable (.es domain and /es/ path)
-- https://shopix.com.ar/comprar-campera-nike-impermeable_pg_2 (.ar domain)
-- https://www.campingcenter.com.ar/ropa-y-calzado/mujer/impermeable1/ (.ar domain)
-- https://www.columbiasportswear.pt/es_CL/c/footwear-winter (.pt domain and /es_CL/ path)
-- https://listado.mercadolibre.com.ar/camperas-de-invierno-impermeables-mujer (.ar domain)
-- https://www.menshealth.com/es/moda-cuidados-hombre/a62734210/decathlon-botas-invierno-impermeables-comodas-hombre/ (/es/ path)
 
 Respond with a JSON object containing ONLY the following fields:
 - "page_type": (string) One of "PRODUCT", "CATEGORY", "BLOG", "OTHER", or "EXCLUDE_NON_URUGUAY" (if the URL is not for Uruguay).
@@ -99,12 +154,6 @@ Example for a CATEGORY page:
   "page_type": "CATEGORY",
   "category_name": "Winter Jackets",
   "reasoning": "Lists multiple winter jackets."
-}}
-
-Example for EXCLUDE_NON_URUGUAY:
-{{
-  "page_type": "EXCLUDE_NON_URUGUAY",
-  "reasoning": "The domain ends with .es, which is not Uruguay, or there is no Uruguay indicator in the URL."
 }}
 
 IMPORTANT: Only classify a page as "PRODUCT" if it is an individual product page FOR SALE, not a category, collection, listing, recipe, or content page.
@@ -276,6 +325,8 @@ Remember: Do NOT include any comments, explanations, or text outside or inside t
                 identified_product_name=llm_identified_product_name,
                 category_name=llm_category_name
             )
+            if self.page_type_cache_enabled and isinstance(candidate.page_type, str) and not candidate.page_type.startswith("ERROR_"):
+                await self._set_cached_page_type(url_info.url, product_name, candidate.model_dump())
             return candidate
         except Exception as e_candidate_creation: # Catch Pydantic ValidationErrors or other issues
             logger.error(f"Critical error during IdentifiedPageCandidate creation for {url_info.url}: {e_candidate_creation}", exc_info=True)

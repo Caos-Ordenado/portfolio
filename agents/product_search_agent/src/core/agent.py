@@ -6,6 +6,7 @@ from .query_validator import QueryValidatorAgent
 from .url_extractor_agent import UrlExtractorAgent
 from .product_page_candidate_identifier import ProductPageCandidateIdentifierAgent
 from .price_extractor import PriceExtractorAgent
+from .relevance_scorer import RelevanceScorer
 from .geo_url_validator_agent import GeoUrlValidatorAgent
 from .category_expansion_agent import CategoryExpansionAgent
 
@@ -19,6 +20,7 @@ from ..tools.web_crawler_data_retrieval_tool import fetch_web_crawler_data_tool,
 # from shared.redis_client import get_redis_client # Example
 
 import inspect
+import os
 
 logger = setup_logger("product_search_agent")
 
@@ -38,6 +40,7 @@ class ProductSearchAgent:
         self.page_identifier = ProductPageCandidateIdentifierAgent() # Assuming no crawler tool passed now
         self.price_extractor = PriceExtractorAgent()
         self.category_expander = CategoryExpansionAgent()
+        self.relevance_scorer = RelevanceScorer()
         
         # Initialize geographic URL validator
         self.url_validator = GeoUrlValidatorAgent(country=country, city=city)
@@ -177,12 +180,12 @@ class ProductSearchAgent:
                     logger.info(f"URL validation reduced candidates from {len(extracted_candidates_list)} to {len(filtered_candidates_list)}")
                     extracted_candidates_list = filtered_candidates_list
                 else:
-                    logger.warning(f"No {self.country}-relevant URLs found, using original results as fallback")
-                    # Keep original extracted_candidates_list as fallback
+                    logger.warning(f"No {self.country}-relevant URLs found, filtering all candidates")
+                    extracted_candidates_list = []
                     
             except Exception as e:
-                logger.error(f"URL validation failed: {e}. Using original results as fallback")
-                # Keep original extracted_candidates_list as fallback
+                logger.error(f"URL validation failed: {e}. Filtering all candidates")
+                extracted_candidates_list = []
         
         # Placeholder: Where to use CrawlerTriggerService?
         # Option 1: Trigger crawls for all extracted URLs proactively
@@ -228,8 +231,9 @@ class ProductSearchAgent:
                     try:
                         search_query = valid_queries[0] if valid_queries else product
                         expanded_valid = await self.url_validator.validate_urls(expanded, search_query)
-                    except Exception:
-                        expanded_valid = expanded
+                    except Exception as e:
+                        logger.error(f"Expanded URL validation failed: {e}. Dropping expanded URLs")
+                        expanded_valid = []
 
                     # Preserve existing PRODUCT candidates as-is
                     preserved_products: list[IdentifiedPageCandidate] = [
@@ -259,6 +263,39 @@ class ProductSearchAgent:
 
                     identified_page_candidates_list = preserved_products
         
+        # Relevance scoring + Montevideo preference ranking (Uruguay-only already enforced upstream)
+        if identified_page_candidates_list:
+            max_candidates = int(os.getenv("MAX_PRODUCT_CANDIDATES_FOR_PRICE", "10"))
+            min_relevance = float(os.getenv("MIN_RELEVANCE_SCORE", "0.2"))
+            scored_candidates = []
+            for candidate in identified_page_candidates_list:
+                scores = await self.relevance_scorer.score_candidate(
+                    product_query=product,
+                    url=candidate.url,
+                    title=candidate.original_title,
+                    snippet=candidate.original_snippet,
+                )
+                scored_candidates.append(candidate.model_copy(update=scores))
+
+            scored_candidates.sort(key=lambda c: c.combined_score or 0.0, reverse=True)
+            filtered_candidates = [
+                c for c in scored_candidates
+                if (c.relevance_score or 0.0) >= min_relevance
+            ]
+            if not filtered_candidates:
+                filtered_candidates = scored_candidates
+                logger.info(
+                    "Relevance gate kept no candidates above threshold; "
+                    f"falling back to top-ranked list (cap={max_candidates})."
+                )
+            identified_page_candidates_list = filtered_candidates[:max_candidates]
+            logger.info(
+                "Relevance gate kept top %d candidates (cap=%d, min_relevance=%.2f)",
+                len(identified_page_candidates_list),
+                max_candidates,
+                min_relevance,
+            )
+
         logger.debug(f"Returning from search_product. Type of identified_page_candidates_list: {type(identified_page_candidates_list)}")
         if isinstance(identified_page_candidates_list, list):
             logger.debug(f"Number of items in identified_page_candidates_list: {len(identified_page_candidates_list)}")

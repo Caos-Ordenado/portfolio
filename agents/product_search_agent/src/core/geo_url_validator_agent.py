@@ -3,10 +3,13 @@ Geographic URL Validator Agent for filtering and validating URLs from geographic
 """
 
 import re
+import os
+import hashlib
 from typing import List, Optional, Dict, Any
 from urllib.parse import urlparse
 from shared.ollama_client import OllamaClient
 from shared.logging import setup_logger
+from shared.redis_client import RedisClient
 
 
 class GeoUrlValidatorAgent:
@@ -32,6 +35,8 @@ class GeoUrlValidatorAgent:
         self.max_iterations = max_iterations
         self.target_url_count = target_url_count
         self.logger = self._setup_logging()
+        self.geo_cache_enabled = os.getenv("GEO_URL_CACHE_ENABLED", "true").lower() == "true"
+        self.geo_cache_ttl_seconds = int(os.getenv("GEO_URL_CACHE_TTL_SECONDS", "604800"))  # 7 days
         
         # Validate and set geographic parameters
         self.country = self._validate_country(country)
@@ -237,9 +242,33 @@ class GeoUrlValidatorAgent:
         self.logger.info(f"Validating {len(urls)} URLs for {location_desc} relevance")
         
         validated_urls = []
+        cached_false = set()
+        remaining_urls = urls
+
+        cache_client = None
+        if self.geo_cache_enabled:
+            try:
+                cache_client = RedisClient()
+                await cache_client.__aenter__()
+                if not await cache_client.health_check():
+                    await cache_client.__aexit__(None, None, None)
+                    cache_client = None
+            except Exception:
+                cache_client = None
+
+        if self.geo_cache_enabled and cache_client:
+            remaining_urls = []
+            for url in urls:
+                cached = await self._get_cached_geo(url, cache_client)
+                if cached is True:
+                    validated_urls.append(url)
+                elif cached is False:
+                    cached_false.add(url)
+                else:
+                    remaining_urls.append(url)
         
         # First pass: Domain and path pattern matching
-        for url in urls:
+        for url in remaining_urls:
             try:
                 if self._is_country_domain(url) or self._has_country_path_indicators(url):
                     validated_urls.append(url)
@@ -249,7 +278,7 @@ class GeoUrlValidatorAgent:
                 continue
         
         # Second pass: LLM-based contextual validation for ambiguous URLs
-        remaining_urls = [url for url in urls if url not in validated_urls]
+        remaining_urls = [url for url in remaining_urls if url not in validated_urls and url not in cached_false]
         if remaining_urls:
             self.logger.info(f"Performing LLM validation on {len(remaining_urls)} remaining URLs")
             llm_validated = await self._llm_validate_urls(remaining_urls, search_query)
@@ -257,10 +286,40 @@ class GeoUrlValidatorAgent:
         
         # Remove duplicates while preserving order
         final_urls = list(dict.fromkeys(validated_urls))
+
+        if self.geo_cache_enabled and cache_client:
+            for url in urls:
+                await self._set_cached_geo(url, url in final_urls, cache_client)
+            await cache_client.__aexit__(None, None, None)
         
         self.logger.info(f"Validation complete: {len(final_urls)}/{len(urls)} URLs validated as {self.country}-relevant")
         
         return final_urls
+
+    def _geo_cache_key(self, url: str) -> str:
+        digest = hashlib.sha256(f"{self.country}:{url}".encode("utf-8")).hexdigest()
+        return f"geo_ok:{self.country}:{digest}"
+
+    async def _get_cached_geo(self, url: str, redis_client: RedisClient) -> Optional[bool]:
+        try:
+            value = await redis_client.get(self._geo_cache_key(url))
+            if value is None:
+                return None
+            if isinstance(value, str):
+                return value == "1"
+            return bool(value)
+        except Exception:
+            return None
+
+    async def _set_cached_geo(self, url: str, is_valid: bool, redis_client: RedisClient) -> None:
+        try:
+            await redis_client.set(
+                self._geo_cache_key(url),
+                "1" if is_valid else "0",
+                ex=self.geo_cache_ttl_seconds,
+            )
+        except Exception:
+            return
     
     async def _regenerate_search_query(self, original_query: str) -> str:
         """

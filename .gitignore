@@ -72,6 +72,8 @@ k8s/argocd/secrets.yaml
 .vscode/
 .idea/
 .taskmaster/
+updated_rules/
+future_plans/
 
 # BFG cleanup reports
 .git.bfg-report/
@@ -82,3 +84,8 @@ venv/
 
 # Certificates
 certs/
+
+
+# Personal Pages
+services/web/pages/susana.vue
+services/web/pages/qr.vue

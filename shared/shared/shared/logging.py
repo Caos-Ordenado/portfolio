@@ -5,28 +5,35 @@ Shared logger configuration for agents.
 import os
 import sys
 
+def _redact_secret(value: str) -> str:
+    if not value:
+        return "<unset>"
+    show_sensitive = os.getenv("LOG_SENSITIVE_CONFIG", "false").lower() == "true"
+    if not show_sensitive:
+        return "<redacted>"
+    if len(value) <= 2:
+        return "*" * len(value)
+    return f"{'*' * (len(value) - 2)}{value[-2:]}"
+
+
 def log_database_config(logger_instance=None):
-    """Log database configuration details at debug level.
-    
-    Args:
-        logger_instance: Optional logger instance to use. If not provided, uses the default logger.
-    """
+    """Log database configuration details at debug level (secrets redacted)."""
     from loguru import logger
     log = logger_instance or logger
-    
+
     # PostgreSQL Configuration
     log.debug("PostgreSQL Configuration:")
     log.debug(f"  Host: {os.getenv('POSTGRES_HOST')}")
     log.debug(f"  Port: {os.getenv('POSTGRES_PORT')}")
     log.debug(f"  Database: {os.getenv('POSTGRES_DB')}")
     log.debug(f"  User: {os.getenv('POSTGRES_USER')}")
-    log.debug(f"  Password: {os.getenv('POSTGRES_PASSWORD')}")
-    
+    log.debug(f"  Password: {_redact_secret(os.getenv('POSTGRES_PASSWORD'))}")
+
     # Redis Configuration
     log.debug("Redis Configuration:")
     log.debug(f"  Host: {os.getenv('REDIS_HOST')}")
     log.debug(f"  Port: {os.getenv('REDIS_PORT')}")
-    log.debug(f"  Password: {os.getenv('REDIS_PASSWORD')}")
+    log.debug(f"  Password: {_redact_secret(os.getenv('REDIS_PASSWORD'))}")
     log.debug(f"  DB: {os.getenv('REDIS_DB')}")
 
 def setup_logger(name: str):

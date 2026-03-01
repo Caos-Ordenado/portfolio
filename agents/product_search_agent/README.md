@@ -34,7 +34,7 @@ The workflow includes a dedicated validation phase to ensure geographic relevanc
    - Geographic relevance scoring based on country/city parameters
 3. **Output**: Filtered list of geographically-relevant URLs
 
-This phase ensures that downstream processing focuses only on geographically relevant results, improving overall accuracy and efficiency.
+This phase ensures that downstream processing focuses only on geographically relevant results, improving overall accuracy and efficiency. If no Uruguay-relevant URLs remain, the pipeline stops (no fail-open fallback).
 
 ### Phase 3: URL Extraction and Pre-filtering
 - **3-Stage Pre-filtering Pipeline**: Pattern-based filtering → Advanced duplicate detection → LLM bulk classification
@@ -50,6 +50,27 @@ This phase ensures that downstream processing focuses only on geographically rel
 ### Phase 5: Product Page Classification
 - Uses AI to classify URLs as product pages
 - Provides confidence scoring for results
+
+### Relevance Scoring and Montevideo Preference
+- After page classification, candidates are scored for **query relevance** and **Montevideo preference**
+- Uruguay is a strict filter; Montevideo is a **ranking signal**, not a hard exclusion
+- Only the top candidates (controlled by `MAX_PRODUCT_CANDIDATES_FOR_PRICE`) proceed to price extraction
+- `MIN_RELEVANCE_SCORE` filters out low-match pages before ranking (falls back to top-ranked if none pass)
+
+### Price Extraction Robustness
+- If crawler/renderer text is missing or too short, the agent attempts a **vision-based fallback**
+- Controlled by `PRICE_VISION_ON_NO_TEXT` (default: true)
+
+### Caching (Derived Artifacts)
+In addition to search results (`search_results:*`) and page content (`webpage:*`), the agent caches:
+- **Geo decisions**: `geo_ok:{country}:{sha(url)}` (TTL: `GEO_URL_CACHE_TTL_SECONDS`, default 7d)
+- **Page type**: `page_type:{sha(url|query)}` (TTL: `PAGE_TYPE_CACHE_TTL_SECONDS`, default 6h)
+- **Relevance score**: `relevance:{sha(url|query)}` (TTL: `RELEVANCE_CACHE_TTL_SECONDS`, default 6h)
+- **Price results**: `price:{sha(url)}` (TTL: `PRICE_CACHE_TTL_SECONDS`, default 2h)
+
+### Security Logging
+- Database/Redis passwords are **redacted** in logs by default
+- Set `LOG_SENSITIVE_CONFIG=true` only for local debugging (avoid in production)
 
 ## GeoUrlValidatorAgent
 
@@ -223,7 +244,7 @@ cd agents/product_search_agent
 ```
 
 ### Environment Configuration
-Create `.env` file with:
+Create `.env` file (see `env.example`) with:
 ```bash
 LOG_LEVEL=INFO
 HOST=0.0.0.0
@@ -231,6 +252,29 @@ PORT=8000
 OLLAMA_BASE_URL=http://home.server:30080/ollama
 WEB_CRAWLER_BASE_URL=http://home.server:30080/crawler
 BRAVE_SEARCH_API_KEY=your_api_key_here
+
+# Relevance scoring and candidate gating
+MAX_PRODUCT_CANDIDATES_FOR_PRICE=10
+MIN_RELEVANCE_SCORE=0.2
+
+# Vision fallback when text content is missing/insufficient
+PRICE_VISION_ON_NO_TEXT=true
+
+# Caching toggles + TTLs (seconds)
+GEO_URL_CACHE_ENABLED=true
+GEO_URL_CACHE_TTL_SECONDS=604800
+PAGE_TYPE_CACHE_ENABLED=true
+PAGE_TYPE_CACHE_TTL_SECONDS=21600
+RELEVANCE_CACHE_ENABLED=true
+RELEVANCE_CACHE_TTL_SECONDS=21600
+PRICE_CACHE_ENABLED=true
+PRICE_CACHE_TTL_SECONDS=7200
+
+# Similarity-based product dedupe
+PRODUCT_NAME_SIMILARITY_THRESHOLD=0.85
+
+# Logging (secrets redacted unless explicitly enabled)
+LOG_SENSITIVE_CONFIG=false
 ```
 
 ## Dependencies

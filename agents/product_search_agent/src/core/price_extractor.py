@@ -4,11 +4,15 @@ import os
 import re
 import time
 import aiohttp
+import hashlib
+import difflib
 from typing import List, Optional, Dict, Any, Union
+from urllib.parse import urlparse
 from shared.logging import setup_logger
 from shared.ollama_client import OllamaClient
 from shared.web_crawler_client import WebCrawlerClient
 from shared.renderer_client import RendererClient
+from shared.redis_client import RedisClient
 from src.api.models import IdentifiedPageCandidate, ProductWithPrice, PriceExtractionResult
 from .batch_content_retriever import BatchContentRetriever, PageContent
 
@@ -26,6 +30,8 @@ class PriceExtractorAgent:
         self.model_name = model_name
         self.temperature = temperature
         self.batch_retriever = BatchContentRetriever()
+        self.price_cache_enabled = os.getenv("PRICE_CACHE_ENABLED", "true").lower() == "true"
+        self.price_cache_ttl_seconds = int(os.getenv("PRICE_CACHE_TTL_SECONDS", "7200"))  # 2 hours
         logger.info(f"PriceExtractorAgent initialized with model: {model_name}, temp: {temperature}, batch retrieval enabled")
 
     async def __aenter__(self):
@@ -118,6 +124,32 @@ class PriceExtractorAgent:
                     pass
         
         return None
+
+    def _price_cache_key(self, url: str) -> str:
+        digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+        return f"price:{digest}"
+
+    def _build_product_from_cache(
+        self,
+        page: IdentifiedPageCandidate,
+        cached: Dict[str, Any],
+    ) -> Optional[ProductWithPrice]:
+        try:
+            price_data = cached.get("price_extraction")
+            if not price_data:
+                return None
+            price_result = PriceExtractionResult(**price_data)
+            if not price_result.success:
+                return None
+            return ProductWithPrice(
+                url=page.url,
+                product_name=cached.get("product_name") or page.identified_product_name or "Unknown Product",
+                original_title=page.original_title,
+                source_query=page.source_query,
+                price_extraction=price_result,
+            )
+        except Exception:
+            return None
 
     async def _get_content_with_renderer_fallback(self, missing_urls: List[str]) -> Dict[str, PageContent]:
         """
@@ -224,6 +256,18 @@ class PriceExtractorAgent:
             return []
         
         extracted_products = []
+
+        redis_client = None
+        if self.price_cache_enabled:
+            try:
+                redis_client = RedisClient()
+                await redis_client.__aenter__()
+                if not await redis_client.health_check():
+                    await redis_client.__aexit__(None, None, None)
+                    redis_client = None
+            except Exception as e:
+                logger.warning(f"Price cache unavailable: {e}")
+                redis_client = None
         
         # 🚀 OPTIMIZATION: Batch retrieve all page content at once
         urls_to_crawl = [page.url for page in product_pages]
@@ -252,14 +296,32 @@ class PriceExtractorAgent:
             async with semaphore:
                 results = []
                 screenshot_task = None
+                allow_vision_on_no_text = os.getenv("PRICE_VISION_ON_NO_TEXT", "true").lower() == "true"
                 
                 try:
+                    if redis_client:
+                        cached_value = await redis_client.get(self._price_cache_key(page.url))
+                        if cached_value:
+                            try:
+                                cached = json.loads(cached_value)
+                                cached_product = self._build_product_from_cache(page, cached)
+                                if cached_product:
+                                    logger.info(f"Price cache hit for {page.url}")
+                                    return [cached_product]
+                            except Exception:
+                                pass
+
                     logger.debug(f"Extracting price for: {page.url}")
                     
                     # Get content from batch results (now returns PageContent)
                     page_content = page_contents.get(page.url)
                     if not page_content:
-                        logger.warning(f"Could not retrieve content for {page.url} - skipping price extraction")
+                        logger.warning(f"Could not retrieve content for {page.url} - attempting vision fallback")
+                        if allow_vision_on_no_text:
+                            vision_data = await self._extract_with_vision(page.url)
+                            vision_product = self._build_product_from_vision(page, vision_data) if vision_data else None
+                            if vision_product:
+                                return [vision_product]
                         return [ProductWithPrice(
                             url=page.url,
                             product_name=page.identified_product_name or "Unknown Product",
@@ -276,7 +338,12 @@ class PriceExtractorAgent:
                         
                     # Skip pages with insufficient content (likely loading issues)  
                     if len(text_content.strip()) < 50:
-                        logger.warning(f"Insufficient content for {page.url} ({len(text_content)} chars) - skipping price extraction")
+                        logger.warning(f"Insufficient content for {page.url} ({len(text_content)} chars) - attempting vision fallback")
+                        if allow_vision_on_no_text:
+                            vision_data = await self._extract_with_vision(page.url)
+                            vision_product = self._build_product_from_vision(page, vision_data) if vision_data else None
+                            if vision_product:
+                                return [vision_product]
                         return [ProductWithPrice(
                             url=page.url,
                             product_name=page.identified_product_name or "Unknown Product",
@@ -384,6 +451,22 @@ class PriceExtractorAgent:
                             source_query=page.source_query,
                             price_extraction=product_result['price_extraction']
                         ))
+
+                    if redis_client:
+                        cached_success = next(
+                            (p for p in results if p.price_extraction.success),
+                            None,
+                        )
+                        if cached_success:
+                            await redis_client.set(
+                                self._price_cache_key(page.url),
+                                {
+                                    "product_name": cached_success.product_name,
+                                    "price_extraction": cached_success.price_extraction.model_dump(),
+                                    "extracted_at": time.time(),
+                                },
+                                ex=self.price_cache_ttl_seconds,
+                            )
                     
                     successful_from_page = len([p for p in products_from_page if p['price_extraction'].success])
                     logger.info(f"Extracted {successful_from_page}/{len(products_from_page)} products from {page.url}")
@@ -418,6 +501,9 @@ class PriceExtractorAgent:
         except asyncio.CancelledError:
             logger.warning("Price extraction cancelled during shutdown, cleaning up...")
             raise
+        finally:
+            if redis_client:
+                await redis_client.__aexit__(None, None, None)
         
         # Flatten results from all pages
         for page_results in all_results:
@@ -438,9 +524,53 @@ class PriceExtractorAgent:
         
         if len(deduplicated_products) < len(successful_products):
             logger.info(f"URL deduplication: {len(successful_products)} → {len(deduplicated_products)} products")
+
+        # Similarity-based dedupe (beyond URL)
+        similarity_threshold = float(os.getenv("PRODUCT_NAME_SIMILARITY_THRESHOLD", "0.85"))
+        name_deduped_products: List[ProductWithPrice] = []
+        normalized_names: List[str] = []
+
+        for product in deduplicated_products:
+            normalized = self._normalize_product_name(product.product_name)
+            if not normalized:
+                name_deduped_products.append(product)
+                normalized_names.append("")
+                continue
+
+            matched_index = None
+            for i, existing_norm in enumerate(normalized_names):
+                if not existing_norm:
+                    continue
+                ratio = difflib.SequenceMatcher(None, normalized, existing_norm).ratio()
+                if ratio >= similarity_threshold:
+                    matched_index = i
+                    break
+
+            if matched_index is None:
+                name_deduped_products.append(product)
+                normalized_names.append(normalized)
+                continue
+
+            existing = name_deduped_products[matched_index]
+            existing_price = existing.price_extraction.price if existing.price_extraction.success else None
+            new_price = product.price_extraction.price if product.price_extraction.success else None
+
+            if existing_price is not None and new_price is not None:
+                if product.price_extraction.currency == existing.price_extraction.currency:
+                    if new_price < existing_price:
+                        name_deduped_products[matched_index] = product
+                else:
+                    if (product.price_extraction.confidence or 0) > (existing.price_extraction.confidence or 0):
+                        name_deduped_products[matched_index] = product
+            else:
+                if (product.price_extraction.confidence or 0) > (existing.price_extraction.confidence or 0):
+                    name_deduped_products[matched_index] = product
+
+        if len(name_deduped_products) < len(deduplicated_products):
+            logger.info(f"Name deduplication: {len(deduplicated_products)} → {len(name_deduped_products)} products")
         
         # Sort deduplicated products by price (cheapest first)
-        sorted_products = sorted(deduplicated_products, key=lambda p: p.sort_price)
+        sorted_products = sorted(name_deduped_products, key=lambda p: p.sort_price)
         
         successful_count = len(sorted_products)
         total_count = len(extracted_products)
@@ -679,6 +809,36 @@ class PriceExtractorAgent:
         except Exception as e:
             logger.debug(f"Screenshot prefetch failed for {url}: {e}")
             return None
+
+    def _build_product_from_vision(
+        self,
+        page: IdentifiedPageCandidate,
+        vision_data: Optional[Dict[str, Any]],
+    ) -> Optional[ProductWithPrice]:
+        if not vision_data:
+            return None
+        price_val = self._coerce_price(vision_data.get("price"))
+        if price_val is None:
+            return None
+        vision_currency = self._normalize_currency(vision_data.get("currency"))
+        vision_original_text = vision_data.get("original_text") or str(vision_data.get("price", ""))
+        if vision_currency:
+            vision_original_text = f"{vision_currency} {vision_original_text}"
+        price_result = PriceExtractionResult(
+            success=True,
+            price=price_val,
+            currency=vision_currency,
+            original_text=vision_original_text,
+            confidence=0.75,
+        )
+        price_result = self._correct_currency_from_original_text(price_result)
+        return ProductWithPrice(
+            url=page.url,
+            product_name=page.identified_product_name or vision_data.get("name") or "unknown product",
+            original_title=page.original_title,
+            source_query=page.source_query,
+            price_extraction=price_result,
+        )
 
     async def _extract_with_vision_from_screenshot(self, screenshot_b64: str, url: str) -> Optional[Dict[str, Any]]:
         """
@@ -1442,3 +1602,16 @@ Extract price(s) as JSON:"""
         
         # No confident match found
         return None
+
+    def _normalize_product_name(self, name: Optional[str]) -> str:
+        if not name:
+            return ""
+        text = name.lower()
+        text = re.sub(r"[^a-z0-9\s]+", " ", text)
+        tokens = [t for t in text.split() if len(t) > 2]
+        stopwords = {
+            "nuevo", "oferta", "original", "promo", "promocion", "promoción",
+            "envio", "envío", "gratis", "pack", "combo",
+        }
+        tokens = [t for t in tokens if t not in stopwords]
+        return " ".join(tokens)
