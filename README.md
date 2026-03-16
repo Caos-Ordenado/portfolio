@@ -105,6 +105,10 @@ This live site showcases the infrastructure and provides links to:
 - PostgreSQL persistence with caching
 - Redis-based performance optimization
 - Concurrent task processing
+- Vision extraction endpoint (`/extract-vision`) via Renderer + Ollama
+- Memory backoff for resource protection
+- Optional robots.txt enforcement
+- URL filtering (allowed_domains, exclude_patterns)
 
 ### 2. Renderer Service (Playwright-as-a-Service)
 - Containerized browser automation
@@ -114,9 +118,11 @@ This live site showcases the infrastructure and provides links to:
 
 ### 3. Product Search Agent
 - LLM-powered data extraction
-- Vision model integration
-- Multi-source aggregation
-- Intelligent analysis
+- Geographic URL validation (UY, AR, BR, CL, CO, PE, EC, MX, US, ES)
+- Multi-phase pipeline: query generation → Brave Search → geo validation → URL extraction → crawling → product classification → price extraction
+- Vision fallback for price extraction when text is insufficient
+- Redis caching for geo decisions, page type, relevance, prices
+- Multi-source aggregation and intelligent analysis
 
 ### 4. Observability Stack
 - Prometheus metrics collection
@@ -124,11 +130,18 @@ This live site showcases the infrastructure and provides links to:
 - Grafana dashboards (4 custom dashboards)
 - Alert management
 
-### 5. Shared Infrastructure
+### 5. Open WebUI Tools Proxy
+- ClusterIP service for Open WebUI tool integrations
+- Forwards `/crawl`, `/render-html`, `/screenshot`, `/extract-vision` to web_crawler and renderer
+- Enables Open WebUI to use crawler and renderer without direct cluster access
+
+### 6. Shared Infrastructure
 - PostgreSQL with Alembic migrations
 - Redis with connection pooling
 - Repository pattern implementation
 - Centralized logging system
+- Install path: `shared/shared/` (`pip install -e shared/shared`)
+- Service clients: WebCrawlerClient, RendererClient, OllamaClient, RedisClient
 
 ## 💼 Professional Context
 
@@ -154,22 +167,35 @@ This infrastructure represents real-world implementation of:
 ```
 ├── agents/              # AI agents (FastAPI)
 │   └── product_search_agent/
-├── services/            # Platform services (FastAPI/Node)
+├── services/            # Platform services (FastAPI)
 │   ├── openwebui_tools/
 │   ├── renderer/
-│   ├── web/
 │   └── web_crawler/
 ├── shared/              # Shared python package (install root is shared/shared/)
 │   └── shared/
 ├── k8s/                 # Kubernetes manifests
 │   ├── argocd/
+│   ├── dozzle/
 │   ├── grafana/
 │   ├── loki/
+│   ├── maintenance/
+│   ├── node-exporter/
+│   ├── kube-state-metrics/
 │   ├── prometheus/
+│   ├── promtail/
+│   ├── secrets/
+│   ├── shared/
 │   ├── traefik/
-│   └── web/
-└── docs/                # Documentation
+│   ├── web_crawler/
+│   ├── renderer/
+│   ├── ollama/
+│   ├── openwebui/
+│   └── openwebui_tools/
+├── future_plans/
+└── .cursor/rules/
 ```
+
+The reyops.com web frontend is deployed from a separate infra repository; this repo focuses on agents, crawler, renderer, and observability.
 
 ## 🛠️ Technology Showcase
 
