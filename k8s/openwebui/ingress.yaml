@@ -7,43 +7,23 @@ spec:
   entryPoints:
     - web
   routes:
-    # Preferred: host-based routing (avoids subpath issues with /api, /ws, /assets, /_app, etc.)
-    # Private (Tailscale/VPN): add `<TAILSCALE_IP> webui.home.server` to /etc/hosts (or your DNS)
-    - match: Host(`webui.home.server`) && PathPrefix(`/`)
+    # Host-based private access (Tailscale/VPN): add `<TAILSCALE_IP> webui.home.server` to /etc/hosts
+    - match: Host(`webui.home.server`)
       kind: Rule
       priority: 300
       services:
         - name: openwebui
           namespace: default
           port: 8080
-    # Public (Cloudflare tunnel): configure DNS/tunnel for chat.reyops.com -> Traefik
-    - match: Host(`chat.reyops.com`) && PathPrefix(`/`)
-      kind: Rule
-      priority: 310
-      services:
-        - name: openwebui
-          namespace: default
-          port: 8080
 
-    # Back-compat (temporary): keep existing public path-based access at www.reyops.com/webui.
-    # Open WebUI uses root-level paths for assets/API, so we also route those prefixes on the same host.
-    - match: Host(`www.reyops.com`) && (PathPrefix(`/_app`) || PathPrefix(`/static`) || Path(`/manifest.json`) || PathPrefix(`/api`) || PathPrefix(`/assets`) || PathPrefix(`/ws`))
-      kind: Rule
-      priority: 210
-      services:
-        - name: openwebui
-          namespace: default
-          port: 8080
-    # Public access via tunnel (www.reyops.com) - subpath
+    # Back-compat: public path-based access at www.reyops.com/webui
     - match: Host(`www.reyops.com`) && PathPrefix(`/webui`)
       kind: Rule
-      priority: 200
+      priority: 210
       middlewares:
-        - name: webui-forwarded-prefix
         - name: webui-stripprefix
+          namespace: default
       services:
         - name: openwebui
           namespace: default
           port: 8080
-
-

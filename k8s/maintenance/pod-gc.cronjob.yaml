@@ -3,8 +3,9 @@ kind: CronJob
 metadata:
   name: pod-gc
 spec:
-  # Hourly cleanup of pods that get stuck in "Unknown" / "ContainerStatusUnknown".
-  schedule: "17 * * * *"
+  # Every minute: cleanup pods stuck in Unknown, Failed, or Error (not auto-recovered by K8s).
+  # Lightweight: short-lived kubectl get/delete, ~10-30s per run, negligible resources.
+  schedule: "* * * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 1
@@ -23,13 +24,19 @@ spec:
                 - /bin/sh
                 - -ec
                 - |
-                  # Delete pods whose STATUS column contains "Unknown" (includes Init:ContainerStatusUnknown).
-                  pods="$(kubectl get pods --no-headers 2>/dev/null | awk '$3 ~ /Unknown/ {print $1}')"
+                  # Delete pods stuck in Unknown, Failed, or Error (not auto-recovered by K8s).
+                  # Deleting triggers Deployment to create fresh pod.
+                  # Scope: default namespace (pod-gc Role is namespace-scoped)
+                  # Use field-selector for Unknown/Failed; awk for display-status "Error"
+                  pods="$(kubectl get pods -n default --field-selector=status.phase=Unknown --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null)"
+                  pods="${pods}$(kubectl get pods -n default --field-selector=status.phase=Failed --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null)"
+                  pods="${pods}$(kubectl get pods -n default --no-headers 2>/dev/null | awk '$3 ~ /^Error$/ {print $1}')"
+                  pods="$(echo "${pods}" | tr -s ' \t\n' '\n' | sort -u | grep -v '^$')"
                   if [ -z "${pods}" ]; then
-                    echo "No Unknown pods to delete."
+                    echo "No Unknown/Failed/Error pods to delete."
                     exit 0
                   fi
-                  echo "Deleting Unknown pods:"
+                  echo "Deleting Unknown/Failed/Error pods:"
                   echo "${pods}"
                   # Force delete to clean up API objects quickly.
-                  echo "${pods}" | xargs -r kubectl delete pod --grace-period=0 --force
+                  echo "${pods}" | xargs -r kubectl delete pod -n default --grace-period=0 --force

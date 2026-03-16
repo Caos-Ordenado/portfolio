@@ -2,18 +2,26 @@
 
 This directory deploys **Open WebUI** into the `default` namespace and exposes it via Traefik.
 
-## Access (recommended: host-based)
+## Access (host-based routing)
 
-Open WebUI uses several **root-level** paths (e.g. `/api`, `/ws`, `/_app`, `/assets`) and is not reliably subpath-friendly.
-The recommended approach is **host-based routing**:
+Open WebUI uses root-level paths (`/api`, `/ws`, `/_app`, `/assets`) and does **not** support a configurable subpath. It must be reached via **host-based routing**.
 
-- Private (Tailscale/VPN): `http://webui.home.server:30080/`
-  - Add `<TAILSCALE_IP> webui.home.server` to your `/etc/hosts` (or your local DNS)
-- Public (Cloudflare tunnel): `https://chat.reyops.com/`
+### Private access (Tailscale/VPN)
 
-## Backwards compatibility (temporary)
+**URL**: `http://webui.home.server:30080/`
 
-- `https://www.reyops.com/webui` is still routed to Open WebUI, but host-based routing is preferred.
+**Required**: Add to your `/etc/hosts` (or local DNS):
+
+```
+<TAILSCALE_IP>  webui.home.server
+```
+
+Use the same IP as `home.server` (your Tailscale machine IP). This does not make Open WebUI the main service—Traefik routes by host header; other services remain at `home.server:30080/ollama`, `home.server:30080/crawler`, etc.
+
+### Public access
+
+- Cloudflare tunnel: `https://chat.reyops.com/`
+- Back-compat: `https://www.reyops.com/webui` (path-based; may have asset issues)
 
 ## 1) PostgreSQL provisioning (one-time)
 
@@ -44,6 +52,8 @@ Generate and apply `openwebui-secrets` using the repo secret generator:
    - `__OLLAMA_BASE_URL__` (recommended: `http://ollama.default.svc.cluster.local:11434`)
    - `WEBUI_SECRET_KEY` is generated automatically via `__SERVER_SECRET_KEY__`
 
+`WEBUI_URL` is pre-set to `http://webui.home.server:30080/` for OAuth/SSO redirects.
+
 ## 3) Deploy
 
 Apply manifests:
@@ -57,21 +67,20 @@ kubectl apply -k k8s/openwebui
 - Check the UI (private): `http://webui.home.server:30080/`
 - Confirm it persists to Postgres (restart the pod and ensure state remains).
 
-## 5) `/webui` subpath verification (optional / legacy)
+## 5) Reset admin password
 
-Because Open WebUI is served behind a Traefik `PathPrefix(/webui)` + `stripPrefix`, validate:
+If you cannot log in, reset the admin password:
 
-- Static assets load correctly under `/webui` (no broken `/_next/...` or similar paths)
-- Redirects keep the `/webui` prefix
-- Any streaming endpoints (SSE / websocket) work if used by your WebUI version
+```bash
+./k8s/openwebui/scripts/reset-admin.sh [admin_email]
+```
 
-This deployment also sets `X-Forwarded-Prefix: /webui` via Traefik middleware to improve subpath compatibility.
+Run from the repo root. Connects to postgres at `home.server:32080` (override with `POSTGRES_HOST` / `POSTGRES_PORT`). Requires `psql`, project `.venv` (bcrypt), and Tailscale/VPN access to home.server.
 
-### Contingency (only if subpath support is incomplete)
+List users in the database:
 
-If Open WebUI can’t reliably run under `/webui` even with forwarded prefix headers:
+```bash
+./k8s/openwebui/scripts/reset-admin.sh --list
+```
 
-- Configure an explicit base-path/root-path env var **if Open WebUI supports it**, or
-- Move to a dedicated host (e.g. `chat.reyops.com`) while keeping the local `/webui` route as an alternative.
-
-
+If no users exist, create one via the sign-up page, or add `WEBUI_ADMIN_EMAIL` and `WEBUI_ADMIN_PASSWORD` to the deployment for first-run admin creation.

@@ -206,13 +206,7 @@ class GeoUrlValidatorAgent:
         Returns:
             OllamaClient: Configured client instance.
         """
-        # Use phi3 for classification tasks - it's better at following JSON output instructions
-        # deepseek-r1 is a reasoning model that outputs thinking process, not suitable for direct classification
-        try:
-            return OllamaClient(model="qwen3:latest")
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize qwen3:latest model: {e}. Falling back to phi3:latest")
-            return OllamaClient(model="phi3:latest")
+        return OllamaClient(model="qwen3:latest")
     
     def _setup_logging(self):
         """

@@ -302,10 +302,10 @@ For detailed technical specifications, see [`prd/README.md`](prd/README.md).
 - **Query Generation**: `qwen3:latest` (temperature 0.0, JSON format)
 - **Query Validation**: `qwen2.5:7b` (temperature 0.0, JSON format)
 - **Product Page Classification**: `qwen3:latest` (temperature 0.1, JSON format)
-- **Geographic URL Validation**: `qwen3:latest` primary, `phi3:latest` fallback (temperature 0.0/0.5, JSON format)
+- **Geographic URL Validation**: `qwen3:latest` (temperature 0.0, JSON format)
 - **Price Extraction**: `qwen2.5:7b` (temperature 0.0, JSON format)
 
 All LLM calls use strict JSON output via `format="json"` for reliable structured responses.
 
 ## Dependencies
-- **Ollama Integration**: LLM services (qwen3:latest, qwen2.5:7b, phi3:latest)
+- **Ollama Integration**: LLM services (qwen3:latest, qwen2.5:7b)
