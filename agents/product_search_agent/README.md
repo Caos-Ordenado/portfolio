@@ -1,7 +1,7 @@
 # Product Search Agent
 
-## Overview
-A FastAPI-based agent that automates the discovery and classification of e-commerce product pages based on natural language product queries. The agent leverages AI-powered query generation, web search, intelligent URL validation, and machine learning classification to provide highly relevant product results for any specified geographic market.
+## Overview - NOT FINISHED
+Quick Vibe coded FastAPI-based agent that automates the discovery and classification of e-commerce product pages based on natural language product queries. The agent leverages AI-powered query generation, web search, intelligent URL validation, and machine learning classification to provide highly relevant product results for any specified geographic market.
 
 ## Key Features
 - **AI-Enhanced Query Generation**: Converts simple product names into optimized search queries with purchase intent

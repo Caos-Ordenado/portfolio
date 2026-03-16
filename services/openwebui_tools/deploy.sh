@@ -27,7 +27,7 @@ cleanup() {
 trap cleanup EXIT
 
 ensure_buildx_builder() {
-  local builder_name="${BUILDX_BUILDER_NAME:-mlops-builder}"
+  local builder_name="${BUILDX_BUILDER_NAME:-portfolio-builder}"
 
   if ! docker buildx version >/dev/null 2>&1; then
     local docker_arch

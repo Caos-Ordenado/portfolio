@@ -28,7 +28,7 @@ echo "🚀 Building and deploying renderer..."
 
 # Ensure buildx is available (required for cross-platform builds on Apple Silicon)
 ensure_buildx_builder() {
-  local builder_name="${BUILDX_BUILDER_NAME:-mlops-builder}"
+  local builder_name="${BUILDX_BUILDER_NAME:-portfolio-builder}"
 
   if ! docker buildx version >/dev/null 2>&1; then
     # If we're already on an amd64 Docker daemon (e.g. Colima started with --arch x86_64),
