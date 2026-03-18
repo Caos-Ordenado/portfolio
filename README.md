@@ -28,13 +28,12 @@ This repository demonstrates professional capabilities through a live, self-host
 - **Data Layer**: PostgreSQL + pgvector, Redis
 - **AI/ML**: Ollama LLM, Vision Models, Custom Agents
 - **Observability**: Prometheus, Grafana, Loki, Promtail
-- **Security**: Cloudflare Tunnel, TLS/SSL, Secret Management
+- **Security**: TLS/SSL, Secret Management
 
 ## 🗺️ Home Server Routing & Endpoints (MicroK8s)
 
 ### Entry points (how you reach the cluster)
 - **HTTP ingress (Traefik)**: `http://home.server:30080/`
-  - Public: Cloudflare Tunnel forwards to `localhost:30080` and sets `Host` headers (e.g. `www.reyops.com`).
   - Private: Tailscale/VPN hits `home.server:30080` directly.
 - **Traefik dashboard (NodePort)**: `http://home.server:31080/dashboard`
   - Also reachable via `http://home.server:30080/dashboard` (path-routed), depending on your threat model.
