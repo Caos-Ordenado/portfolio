@@ -16,6 +16,15 @@ spec:
           namespace: default
           port: 8080
 
+    # Public hostname (e.g. Cloudflare -> Hetzner -> Tailscale -> home :30080; Host header must be chat.reyops.com)
+    - match: Host(`chat.reyops.com`)
+      kind: Rule
+      priority: 300
+      services:
+        - name: openwebui
+          namespace: default
+          port: 8080
+
     # Back-compat: public path-based access at www.reyops.com/webui
     - match: Host(`www.reyops.com`) && PathPrefix(`/webui`)
       kind: Rule

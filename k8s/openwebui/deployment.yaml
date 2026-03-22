@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: openwebui
-          image: ghcr.io/open-webui/open-webui:main
+          image: ghcr.io/open-webui/open-webui:v0.6.43
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
@@ -25,6 +25,15 @@ spec:
             - secretRef:
                 name: openwebui-secrets
           # NOTE: Keep probes path-agnostic because WebUI may redirect on /.
+          # First boot can take several minutes (model/asset downloads); without this,
+          # liveness/readiness fight slow startup and rollouts look "stuck".
+          startupProbe:
+            httpGet:
+              path: /
+              port: 8080
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 60
           readinessProbe:
             httpGet:
               path: /

@@ -44,13 +44,17 @@ This repository demonstrates professional capabilities through a live, self-host
 
 ```mermaid
 flowchart TB
-  subgraph ExternalAccess
-    CloudflareTunnel[CloudflareTunnel_Public] -->|"to localhost:30080"| TraefikWeb
-    TailscaleVPN[TailscaleVPN_Private] -->|"to home.server:30080"| TraefikWeb
+  subgraph publicChat [Public chat.reyops.com]
+    CF[Cloudflare] --> HZTraefik[Hetzner_Traefik]
+    HZTraefik -->|"Tailscale to home.server:30080"| TraefikWeb
+  end
+
+  subgraph privateAccess [Private Tailscale]
+    TailscaleVPN[Tailscale_clients] -->|"home.server:30080"| TraefikWeb
   end
 
   subgraph Cluster
-    TraefikWeb[Traefik_NodePort_30080]
+    TraefikWeb[Home_Traefik_NodePort_30080]
 
     Web[web_default]
     WebCrawler[web-crawler_default]

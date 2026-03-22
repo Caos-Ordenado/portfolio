@@ -29,8 +29,8 @@ spec:
                   # Scope: default namespace (pod-gc Role is namespace-scoped)
                   # Use field-selector for Unknown/Failed; awk for display-status "Error"
                   pods="$(kubectl get pods -n default --field-selector=status.phase=Unknown --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null)"
-                  pods="${pods}$(kubectl get pods -n default --field-selector=status.phase=Failed --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null)"
-                  pods="${pods}$(kubectl get pods -n default --no-headers 2>/dev/null | awk '$3 ~ /^Error$/ {print $1}')"
+                  pods="${pods}$(printf '\n%s' "$(kubectl get pods -n default --field-selector=status.phase=Failed --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null)")"
+                  pods="${pods}$(printf '\n%s' "$(kubectl get pods -n default --no-headers 2>/dev/null | awk '$3 ~ /^Error$/ {print $1}')")"
                   pods="$(echo "${pods}" | tr -s ' \t\n' '\n' | sort -u | grep -v '^$')"
                   if [ -z "${pods}" ]; then
                     echo "No Unknown/Failed/Error pods to delete."

@@ -7,7 +7,7 @@ spec:
   entryPoints:
     - web
   routes:
-    # Public access via tunnel (www.reyops.com)
+    # Public access when traffic is routed to home Traefik with this host (e.g. CF origin to home)
     - match: Host(`www.reyops.com`) && PathPrefix(`/crawler`)
       kind: Rule
       priority: 200
