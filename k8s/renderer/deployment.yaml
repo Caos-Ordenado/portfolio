@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: renderer
-        image: renderer:dev-20260927175918
+        image: renderer:dev-20260927182733
         imagePullPolicy: Never
         ports:
         - containerPort: 8000
