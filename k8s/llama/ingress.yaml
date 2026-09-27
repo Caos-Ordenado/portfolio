@@ -1,0 +1,18 @@
+# Exposed on the home.server ingress (LAN + Tailscale only), same exposure as the old /ollama route.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: llama
+  namespace: default
+spec:
+  entryPoints:
+    - web
+  routes:
+    - kind: Rule
+      match: PathPrefix(`/llm`)
+      middlewares:
+        - name: llama-stripprefix
+          namespace: default
+      services:
+        - name: llama
+          port: 8080

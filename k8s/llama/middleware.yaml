@@ -1,10 +1,9 @@
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
-  name: ollama-stripprefix
+  name: llama-stripprefix
   namespace: default
 spec:
   stripPrefix:
     prefixes:
-      - /ollama
-      - /ollama/
+      - /llm

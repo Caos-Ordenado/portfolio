@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llama-swap-config
+  namespace: default
+  labels:
+    app: llama
+    tier: inference
+    environment: home-lab
+data:
+  # llama-swap config: one llama-server process at a time, swapped on demand.
+  # Hardware: RTX 4070 Ti 12GB + i9-13900K (P-cores = CPU 0-15) + 32GB DDR5-5600.
+  # Weights stay mmap'd (do not add -lm none / --no-mmap: it OOMs the 24Gi pod).
+  # MoE models keep attention + some experts on GPU; the rest of the experts live in RAM
+  # via --n-cpu-moe. Tune N with the procedure in README.md (lower N = more on GPU).
+  config.yaml: |
+    healthCheckTimeout: 300
+    logLevel: info
+    logToStdout: "proxy,upstream"
+    # Do not keep request/response bodies in memory (scraped pages, prompts)
+    captureBuffer: 0
+    # Unload after 30 minutes idle
+    globalTTL: 1800
+    includeAliasesInList: true
+
+    macros:
+      # 16 threads pinned to the P-cores (HT); E-cores slow down MoE expert matmuls
+      "cpu": "--threads 16 -Cr 0-15 --threads-batch 16 -Crb 0-15"
+      "server": >-
+        /app/llama-server
+        --host 127.0.0.1 --port ${PORT}
+        -ngl 99 -fa on --jinja
+        ${cpu}
+        -b 4096 -ub 4096
+        --metrics
+      "models": "/models"
+
+    models:
+      # OpenCode / orchestration: tool calling, 128K context
+      "qwen3.6-35b-a3b":
+        name: "Qwen3.6 35B-A3B (UD-Q4_K_M)"
+        aliases: ["coder"]
+        cmd: |
+          ${server}
+          -m ${models}/qwen3.6-35b-a3b/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+          -c 131072 -np 1 -ctk q8_0 -ctv q8_0
+          --n-cpu-moe 28
+          --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0
+
+      # Vision (screenshots -> JSON), thinking off
+      "gemma4-26b-a4b":
+        name: "Gemma 4 26B-A4B QAT (UD-Q4_K_XL) + vision"
+        aliases: ["vision"]
+        cmd: |
+          ${server}
+          -m ${models}/gemma4-26b-a4b/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf
+          --mmproj ${models}/gemma4-26b-a4b/mmproj-F16.gguf
+          -c 32768 -np 2 -ctk q8_0 -ctv q8_0
+          --n-cpu-moe 18
+          --image-max-tokens 1120
+          --reasoning-budget 0
+
+      # Reasoning / docs
+      "gpt-oss-20b":
+        name: "gpt-oss 20B (MXFP4)"
+        aliases: ["reasoning"]
+        cmd: |
+          ${server}
+          -m ${models}/gpt-oss-20b/gpt-oss-20b-MXFP4.gguf
+          -c 65536 -np 1
+          --n-cpu-moe 8
+
+      # Fast JSON extraction for the scraping pipeline, fully on GPU, thinking off
+      "qwen3.5-9b":
+        name: "Qwen3.5 9B (Q4_K_M)"
+        aliases: ["extract"]
+        cmd: |
+          ${server}
+          -m ${models}/qwen3.5-9b/Qwen3.5-9B-Q4_K_M.gguf
+          -c 65536 -np 2 -ctk q8_0 -ctv q8_0
+          --reasoning-budget 0

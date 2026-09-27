@@ -13,7 +13,7 @@ from shared.interfaces.web_crawler import (
     VisionExtractRequest,
     VisionExtractResponse,
 )
-from shared import setup_logger, DatabaseContext, DatabaseConfig, OllamaClient
+from shared import setup_logger, DatabaseContext, DatabaseConfig, LLMClient, MODEL_VISION
 from shared.renderer_client import RendererClient
 from shared.interfaces.renderer import RendererScreenshotRequest
 from ..core import WebCrawlerAgent, CrawlerSettings
@@ -153,14 +153,14 @@ async def extract_vision(request: VisionExtractRequest, http_req: Request) -> Vi
     # No db_context needed here
     viewport_width = int(os.getenv("CRAWLER_VIEWPORT_WIDTH", "1920"))
     viewport_height = int(os.getenv("CRAWLER_VIEWPORT_HEIGHT", "1080"))
-    ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://home.server:30080/ollama")
-    ollama_model = os.getenv("OLLAMA_MODEL", "qwen2.5vl:7b")
+    llm_base_url = os.getenv("LLM_BASE_URL", "http://home.server:30080/llm")
+    llm_model = os.getenv("LLM_MODEL", MODEL_VISION)
     renderer_base_url = os.getenv("RENDERER_URL", "http://home.server:30080/renderer")
 
     try:
         logger.info(
             f"extract-vision:start url={request.url} timeout={request.timeout} renderer={renderer_base_url} "
-            f"ollama={ollama_base_url} model={ollama_model} vw={viewport_width} vh={viewport_height}"
+            f"llm={llm_base_url} model={llm_model} vw={viewport_width} vh={viewport_height}"
         )
         async with RendererClient(base_url=renderer_base_url) as renderer:
             logger.debug("extract-vision: calling renderer.screenshot")
@@ -194,16 +194,16 @@ async def extract_vision(request: VisionExtractRequest, http_req: Request) -> Vi
         )
 
         logger.debug(
-            f"extract-vision: calling Ollama vision model={ollama_model} base={ollama_base_url} fields={keys_csv}"
+            f"extract-vision: calling LLM vision model={llm_model} base={llm_base_url} fields={keys_csv}"
         )
-        async with OllamaClient(base_url=ollama_base_url, model=ollama_model) as llm:
+        async with LLMClient(base_url=llm_base_url, model=llm_model) as llm:
             content = await llm.extract_from_image(
                 image_base64=image_b64,
                 instruction=instruction,
-                model=ollama_model,
+                model=llm_model,
                 format="json",
             )
-        logger.debug(f"extract-vision: ollama content prefix={str(content)[:200]}")
+        logger.debug(f"extract-vision: llm content prefix={str(content)[:200]}")
 
         data = None
         try:

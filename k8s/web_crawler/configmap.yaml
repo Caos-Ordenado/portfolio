@@ -47,9 +47,9 @@ data:
   CRAWLER_DATA_RETENTION_DAYS: "30" 
   CRAWLER_LOG_LEVEL: "INFO"
 
-  # Ollama settings (non-sensitive)
-  OLLAMA_BASE_URL: "http://ollama.default.svc.cluster.local:11434" 
-  OLLAMA_MODEL: "qwen2.5vl:7b"
+  # Local LLM gateway settings (non-sensitive)
+  LLM_BASE_URL: "http://llama.default.svc.cluster.local:8080"
+  LLM_MODEL: "vision"
   
   # Renderer service URL (internal)
   RENDERER_URL: "http://renderer.default.svc.cluster.local:8000"

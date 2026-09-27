@@ -97,11 +97,11 @@ data:
         },
         {
           "type": "logs",
-          "title": "ollama (última hora)",
+          "title": "llama-swap (última hora)",
           "gridPos": {"x": 0, "y": 14, "w": 12, "h": 10},
           "datasource": {"type": "loki", "uid": "loki"},
           "targets": [
-            { "refId": "A", "expr": "{filename=~\".*ollama.*\"}" }
+            { "refId": "A", "expr": "{filename=~\".*llama-swap.*\"}" }
           ]
         },
         {

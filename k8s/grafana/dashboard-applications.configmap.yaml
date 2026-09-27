@@ -20,13 +20,13 @@ data:
       "panels": [
         {
           "type": "stat",
-          "title": "Ollama Requests (5m)",
+          "title": "LLM gateway requests (5m)",
           "gridPos": {"x": 0, "y": 0, "w": 4, "h": 4},
           "datasource": {"type": "loki", "uid": "loki"},
           "targets": [
             {
               "refId": "A",
-              "expr": "count_over_time({job=\"applications\", container=\"ollama\"} |= \"GET\" [5m])"
+              "expr": "count_over_time({job=\"applications\", container=\"llama-swap\"} |= \"POST\" [5m])"
             }
           ]
         },

@@ -2,13 +2,13 @@ import asyncio
 import json
 from typing import List, Dict, Any, Optional
 import re
-import httpx # For potential errors from OllamaClient
+import httpx # For potential errors from LLMClient
 import os
 import hashlib
 from urllib.parse import urlparse
 
 from shared.logging import setup_logger
-from shared.ollama_client import OllamaClient
+from shared.llm_client import LLMClient, MODEL_EXTRACT
 from shared.redis_client import RedisClient
 from shared.utils import strip_json_code_block, remove_json_comments, extract_fields_from_partial_json
 from src.api.models import ExtractedUrlInfo, IdentifiedPageCandidate
@@ -19,7 +19,7 @@ logger = setup_logger("product_page_candidate_identifier")
 
 
 class ProductPageCandidateIdentifierAgent:
-    def __init__(self, model_name="qwen3:latest", temperature=0.1):
+    def __init__(self, model_name=MODEL_EXTRACT, temperature=0.1):
         self.model_name = model_name
         self.temperature = temperature
         self.page_type_cache_enabled = os.getenv("PAGE_TYPE_CACHE_ENABLED", "true").lower() == "true"
@@ -198,7 +198,7 @@ Remember: Do NOT include any comments, explanations, or text outside or inside t
         response_data = None
 
         try:
-            async with OllamaClient() as llm:
+            async with LLMClient() as llm:
                 response_text = await llm.generate(
                     prompt=user_prompt,
                     system=system_prompt,

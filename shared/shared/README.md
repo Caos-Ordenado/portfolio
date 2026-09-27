@@ -16,7 +16,8 @@ from shared import (
     DatabaseContext,
     RedisClient,
     WebCrawlerClient,
-    OllamaClient,
+    LLMClient,
+    MODEL_EXTRACT,
     RendererClient,
 )
 
@@ -38,12 +39,12 @@ async with WebCrawlerClient() as crawler:
     # Crawling operations here
     pass
 
-# Use Ollama LLM
-async with OllamaClient() as llm:
+# Use the local LLM gateway (llama-swap, OpenAI-compatible)
+async with LLMClient() as llm:
     # Structured JSON response
     response = await llm.generate(
         prompt="Return ONLY JSON per schema...",
-        model="qwen2.5:7b",
+        model=MODEL_EXTRACT,
         temperature=0.0,
         num_predict=512,
         format="json",
@@ -141,23 +142,28 @@ async with WebCrawlerClient() as crawler:
         print(f"Title: {result.title}")
 ```
 
-### 3. Ollama LLM Client
-Interface to the local Ollama LLM service:
+### 3. LLM Client
+Interface to the local LLM gateway (llama-swap + llama.cpp on the home server, OpenAI-compatible `/v1/chat/completions`). See `portfolio/k8s/llama/README.md` for the runbook.
+
+- Env vars: `LLM_BASE_URL` (default `http://home.server:30080/llm`), `LLM_MODEL` (default `extract`), `LLM_TIMEOUT_S` (default `180`).
+- Model alias constants: `MODEL_CODER` (`coder`), `MODEL_REASONING` (`reasoning`), `MODEL_EXTRACT` (`extract`), `MODEL_VISION` (`vision`).
+- Only one model is loaded at a time; llama-swap swaps models on demand and queues requests.
+- Failures raise `LLMError`.
 
 ```python
-from shared.ollama_client import OllamaClient
+from shared.llm_client import LLMClient, LLMError, MODEL_EXTRACT, MODEL_REASONING
 
-async with OllamaClient() as llm:
+async with LLMClient() as llm:
     # Simple generation
     response = await llm.generate(
         "Summarize this text: ...",
-        model="llama3.2"
+        model=MODEL_EXTRACT
     )
     
     # Advanced options
     response = await llm.generate(
         prompt="Your prompt here",
-        model="qwen3:latest",
+        model=MODEL_REASONING,
         temperature=0.7,
         num_predict=500,
         format=None,

@@ -1,7 +1,7 @@
 # Web Crawler Service
 
 A FastAPI service for crawling web pages, optionally persisting results via the shared storage layer (PostgreSQL + Redis),
-and providing a vision extraction endpoint via the shared Renderer + Ollama.
+and providing a vision extraction endpoint via the shared Renderer + local LLM gateway (llama-swap).
 
 ## Features
 
@@ -22,7 +22,7 @@ and providing a vision extraction endpoint via the shared Renderer + Ollama.
   - CORS support
 - Vision extraction endpoint (`/extract-vision`) using:
   - shared Renderer service (Playwright-as-a-Service)
-  - shared Ollama client (vision model, JSON-only response)
+  - shared LLM client (`vision` model alias, JSON-only response)
 
 ## To run locally
 
@@ -91,8 +91,8 @@ CRAWLER_ROBOTS_CACHE_TTL_SECONDS=3600
 CRAWLER_VIEWPORT_HEIGHT=1080
 CRAWLER_VIEWPORT_WIDTH=1920
 RENDERER_URL=http://home.server:30080/renderer
-OLLAMA_BASE_URL=http://home.server:30080/ollama
-OLLAMA_MODEL=qwen2.5vl:7b
+LLM_BASE_URL=http://home.server:30080/llm
+LLM_MODEL=vision
 ```
 
 ### Per-request crawl controls (these are NOT read from env by the server)
@@ -235,8 +235,8 @@ When using Redis storage:
 ### Vision Extraction Endpoint
 
 - Path: `/extract-vision`
-- Purpose: Navigate with Playwright (Chromium), capture a full-page screenshot, and extract structured fields using the Ollama vision model.
-- Uses non-sensitive env vars: `OLLAMA_BASE_URL`, `OLLAMA_MODEL`
+- Purpose: Navigate with Playwright (Chromium), capture a full-page screenshot, and extract structured fields using the `vision` model (Gemma 4 26B-A4B via llama-swap).
+- Uses non-sensitive env vars: `LLM_BASE_URL`, `LLM_MODEL`
 
 Example curl
 ```bash

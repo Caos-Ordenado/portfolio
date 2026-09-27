@@ -9,7 +9,7 @@ import difflib
 from typing import List, Optional, Dict, Any, Union
 from urllib.parse import urlparse
 from shared.logging import setup_logger
-from shared.ollama_client import OllamaClient
+from shared.llm_client import LLMClient, MODEL_EXTRACT, MODEL_VISION
 from shared.web_crawler_client import WebCrawlerClient
 from shared.renderer_client import RendererClient
 from shared.redis_client import RedisClient
@@ -19,12 +19,12 @@ from .batch_content_retriever import BatchContentRetriever, PageContent
 logger = setup_logger("price_extractor_agent")
 
 class PriceExtractorAgent:
-    def __init__(self, model_name: str = "qwen2.5:7b", temperature: float = 0.0):
+    def __init__(self, model_name: str = MODEL_EXTRACT, temperature: float = 0.0):
         """
         Initialize PriceExtractorAgent with LLM-based price extraction and batch content retrieval.
         
         Args:
-            model_name: Ollama model to use for price extraction
+            model_name: LLM model alias to use for price extraction
             temperature: Temperature for LLM generation (0.0 for deterministic)
         """
         self.model_name = model_name
@@ -168,7 +168,7 @@ class PriceExtractorAgent:
         
         logger.info(f"Using renderer fallback for {len(missing_urls)} URLs where crawler failed")
         
-        CONCURRENT_RENDERER_LIMIT = 3  # Match Ollama concurrency
+        CONCURRENT_RENDERER_LIMIT = 3  # Match LLM concurrency
         semaphore = asyncio.Semaphore(CONCURRENT_RENDERER_LIMIT)
 
         def _looks_blocked_text(text: str) -> tuple[bool, str]:
@@ -288,7 +288,7 @@ class PriceExtractorAgent:
             page_contents.update(renderer_content)
         
         # 🚀 OPTIMIZATION: Process pages concurrently with limited parallelism
-        CONCURRENT_LLM_LIMIT = 3  # Limit concurrent LLM calls to avoid overloading Ollama
+        CONCURRENT_LLM_LIMIT = 3  # Limit concurrent LLM calls to avoid overloading the LLM gateway
         semaphore = asyncio.Semaphore(CONCURRENT_LLM_LIMIT)
         
         async def process_single_page(page: IdentifiedPageCandidate) -> List[ProductWithPrice]:
@@ -867,19 +867,10 @@ class PriceExtractorAgent:
             "If multiple products shown, extract only the main/featured product."
         )
         
-        # Try moondream2 first (fast, ~1.8B params)
-        result = await self._try_vision_model_with_image(screenshot_b64, url, instruction, "moondream:latest")
+        result = await self._try_vision_model_with_image(screenshot_b64, url, instruction, MODEL_VISION)
         if result:
             total_ms = (time.perf_counter() - t_start) * 1000
-            logger.info(f"Vision extraction (prefetched) total: {total_ms:.0f}ms for {url} (moondream succeeded)")
-            return result
-        
-        # Fallback to qwen2.5vl:7b (slower but more accurate, 7B params)
-        logger.info(f"moondream failed, trying qwen2.5vl:7b fallback for {url}")
-        result = await self._try_vision_model_with_image(screenshot_b64, url, instruction, "qwen2.5vl:7b")
-        if result:
-            total_ms = (time.perf_counter() - t_start) * 1000
-            logger.info(f"Vision extraction (prefetched) total: {total_ms:.0f}ms for {url} (qwen2.5vl fallback succeeded)")
+            logger.info(f"Vision extraction (prefetched) total: {total_ms:.0f}ms for {url}")
             return result
         
         total_ms = (time.perf_counter() - t_start) * 1000
@@ -890,8 +881,7 @@ class PriceExtractorAgent:
         """
         Extract product info from a rendered screenshot using vision models.
         
-        Uses moondream2 (1.8B, fast) as primary model with qwen2.5vl:7b (7B, accurate) as fallback.
-        Takes screenshot ONCE and reuses it for both models.
+        Uses the `vision` model alias (Gemma 4 26B-A4B) served by llama-swap.
         """
         import time
         t_start = time.perf_counter()
@@ -925,19 +915,10 @@ class PriceExtractorAgent:
         renderer_ms = (time.perf_counter() - t_renderer) * 1000
         logger.debug(f"Renderer screenshot took {renderer_ms:.0f}ms for {url}")
         
-        # Try moondream2 first (fast, ~1.8B params) - reuse screenshot
-        result = await self._try_vision_model_with_image(screenshot_b64, url, instruction, "moondream:latest")
+        result = await self._try_vision_model_with_image(screenshot_b64, url, instruction, MODEL_VISION)
         if result:
             total_ms = (time.perf_counter() - t_start) * 1000
-            logger.info(f"Vision extraction total: {total_ms:.0f}ms for {url} (moondream succeeded)")
-            return result
-        
-        # Fallback to qwen2.5vl:7b (slower but more accurate, 7B params) - reuse SAME screenshot
-        logger.info(f"moondream failed, trying qwen2.5vl:7b fallback for {url}")
-        result = await self._try_vision_model_with_image(screenshot_b64, url, instruction, "qwen2.5vl:7b")
-        if result:
-            total_ms = (time.perf_counter() - t_start) * 1000
-            logger.info(f"Vision extraction total: {total_ms:.0f}ms for {url} (qwen2.5vl fallback succeeded)")
+            logger.info(f"Vision extraction total: {total_ms:.0f}ms for {url}")
             return result
         
         total_ms = (time.perf_counter() - t_start) * 1000
@@ -954,7 +935,7 @@ class PriceExtractorAgent:
             screenshot_b64: Base64-encoded screenshot image
             url: Original page URL (for logging)
             instruction: Extraction instruction for the LLM
-            model: Ollama vision model to use
+            model: Vision model alias to use
             
         Returns:
             Extracted data dict or None if failed
@@ -963,10 +944,9 @@ class PriceExtractorAgent:
         t_llm = time.perf_counter()
         
         try:
-            # moondream only supports 2048 context, use smaller num_predict
-            num_predict = 2048 if "moondream" in model else 4096
+            num_predict = 4096
             
-            async with OllamaClient() as llm:
+            async with LLMClient() as llm:
                 result = await llm.extract_from_image(
                     image_base64=screenshot_b64,
                     instruction=instruction,
@@ -1028,7 +1008,7 @@ class PriceExtractorAgent:
         Args:
             url: Page URL to screenshot and analyze
             instruction: Extraction instruction for the LLM
-            model: Ollama vision model to use
+            model: Vision model alias to use
             
         Returns:
             Extracted data dict or None if failed
@@ -1145,7 +1125,7 @@ class PriceExtractorAgent:
             system_prompt = self._create_catalog_detection_system_prompt()
             user_prompt = self._create_catalog_detection_user_prompt(page_content, url, product_name)
             
-            async with OllamaClient() as llm:
+            async with LLMClient() as llm:
                 response = await llm.generate(
                     prompt=user_prompt,
                     system=system_prompt,
@@ -1267,8 +1247,8 @@ Extract as JSON:"""
             system_prompt = self._create_system_prompt()
             user_prompt = self._create_user_prompt(page_content, url, product_name)
             
-            # Use Ollama client for LLM inference
-            async with OllamaClient() as llm:
+            # Use the local LLM gateway for inference
+            async with LLMClient() as llm:
                 response = await llm.generate(
                     prompt=user_prompt,
                     system=system_prompt,

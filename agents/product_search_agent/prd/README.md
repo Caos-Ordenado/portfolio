@@ -47,8 +47,8 @@ The agent serves as a unified API endpoint that orchestrates multiple AI-powered
                    │               │               │
                    ▼               ▼               ▼
           ┌─────────────┐ ┌─────────────┐ ┌──────────────┐
-          │ Ollama LLM  │ │ Brave       │ │ Web Crawler  │
-          │ Service     │ │ Search      │ │ Service      │
+          │ LLM Gateway │ │ Brave       │ │ Web Crawler  │
+          │ (llama-swap)│ │ Search      │ │ Service      │
           └─────────────┘ └─────────────┘ └──────────────┘
                                    │
                             ┌──────┴──────┐
@@ -62,8 +62,8 @@ The agent serves as a unified API endpoint that orchestrates multiple AI-powered
                             │             │
                             ▼             ▼
                    ┌──────────────┐ ┌───────────────┐
-                   │ qwen3:latest │ │ qwen3:latest  │
-                   │ 1.5b Model   │ │ Model         │
+                   │ extract      │ │ extract       │
+                   │ (Qwen3.5-9B) │ │ (Qwen3.5-9B)  │
                    └──────────────┘ └───────────────┘
 ```
 
@@ -75,9 +75,9 @@ The agent serves as a unified API endpoint that orchestrates multiple AI-powered
 - **Ingress**: Traefik reverse proxy
 
 #### Required Services
-- **Ollama LLM Service**: 
-  - URL: `http://home.server:30080/ollama`
-  - Models: qwen3:latest (primary), qwen2.5:7b, phi3:latest (fallback)
+- **LLM Gateway (llama-swap + llama.cpp)**: 
+  - URL: `http://home.server:30080/llm` (OpenAI-compatible; runbook `portfolio/k8s/llama/README.md`)
+  - Models: `extract` alias (Qwen3.5-9B, primary for all text steps), `vision` alias (Gemma 4 26B-A4B, screenshot price fallback)
   - Purpose: AI query generation, validation, URL validation, and product page classification
 
 - **Web Crawler Service**:
@@ -99,7 +99,7 @@ The agent utilizes the `shared` package for common functionality:
 
 - **Logging System**: Thread-safe logging with loguru
 - **Database Access**: Repository pattern with PostgreSQL + Redis caching
-- **Service Clients**: Async HTTP clients for Ollama and Web Crawler
+- **Service Clients**: Async HTTP clients for the LLM gateway and Web Crawler
 - **Configuration Management**: Environment-based configuration
 
 ## 4. Functional Requirements
@@ -109,8 +109,8 @@ The agent utilizes the `shared` package for common functionality:
 #### Phase 1: Query Generation & Validation
 **Input**: Natural language product name (e.g., "crema para el cabello")
 **Process**: 
-- **Step 1.1**: Uses Ollama LLM (qwen3:latest model) to generate 5 optimized search queries
-- **Step 1.2**: Validates queries using qwen2.5:7b model to ensure relevance and purchase intent
+- **Step 1.1**: Uses the LLM gateway (`extract` model) to generate 5 optimized search queries
+- **Step 1.2**: Validates queries using the `extract` model to ensure relevance and purchase intent
 - Queries designed with purchase intent and geographic context
 - JSON-formatted output with specific search terms
 
@@ -140,7 +140,7 @@ The agent utilizes the `shared` package for common functionality:
 **Input**: Raw search results from Phase 2
 **Process**: 
 - Country-specific domain pattern matching (e.g., .uy, .com.uy for Uruguay; .ar, .com.ar for Argentina)
-- LLM-based contextual analysis using qwen3:latest model with geographic prompts
+- LLM-based contextual analysis using the `extract` model with geographic prompts
 - Geographic indicator detection in URLs and metadata for the specified country/city
 - Business name pattern recognition for local retailers and e-commerce platforms
 - Multi-country support: UY, AR, BR, CL, CO, PE, EC, MX, US, ES
@@ -176,7 +176,7 @@ The agent utilizes the `shared` package for common functionality:
 #### Phase 5: Product Page Classification
 **Input**: Candidate URLs
 **Process**:
-- Uses Ollama LLM (qwen3:latest) to classify URLs as product or category pages
+- Uses the LLM gateway (`extract`) to classify URLs as product or category pages
 - Analyzes URL patterns, domain context, and available metadata
 - Multi-class classification (PRODUCT, CATEGORY) with confidence scoring
 
@@ -206,7 +206,7 @@ The agent utilizes the `shared` package for common functionality:
 #### Phase 7: Price Extraction
 **Input**: Identified product page candidates
 **Process**:
-- Uses Ollama LLM (qwen2.5:7b) to extract product prices and details
+- Uses the LLM gateway (`extract`, with `vision` screenshot fallback) to extract product prices and details
 - Analyzes page content, titles, and structured data
 - Returns products sorted by price
 
@@ -284,12 +284,12 @@ The agent utilizes the `shared` package for common functionality:
 1. **QueryGeneratorAgent**
    - **File**: `src/core/query_generator.py`
    - **Purpose**: AI-powered search query generation
-   - **LLM Integration**: Ollama with qwen3:latest model (temperature 0.0, JSON format)
+   - **LLM Integration**: LLM gateway with `extract` model (temperature 0.0, JSON format)
 
 2. **QueryValidatorAgent**
    - **File**: `src/core/query_validator.py`
    - **Purpose**: Validates and filters generated search queries
-   - **LLM Integration**: Ollama with qwen2.5:7b model (temperature 0.0, JSON format)
+   - **LLM Integration**: LLM gateway with `extract` model (temperature 0.0, JSON format)
 
 3. **SearchAgent**
    - **File**: `src/core/search_agent.py`
@@ -306,19 +306,19 @@ The agent utilizes the `shared` package for common functionality:
 5. **GeoUrlValidatorAgent**
    - **File**: `src/core/geo_url_validator_agent.py`
    - **Purpose**: Parametrized geographic validation of URLs for any country/city
-   - **LLM Integration**: Ollama with qwen3:latest model (phi3:latest fallback)
+   - **LLM Integration**: LLM gateway with `extract` model (pattern-based fallback when the LLM is unavailable)
    - **Features**: Multi-country domain patterns, contextual analysis, retry logic
    - **Countries Supported**: UY, AR, BR, CL, CO, PE, EC, MX, US, ES
 
 6. **ProductPageCandidateIdentifierAgent**
    - **File**: `src/core/product_page_candidate_identifier.py`
    - **Purpose**: AI-powered product page classification
-   - **LLM Integration**: Ollama with qwen3:latest model (temperature 0.1, JSON format)
+   - **LLM Integration**: LLM gateway with `extract` model (temperature 0.1, JSON format)
 
 7. **PriceExtractorAgent**
    - **File**: `src/core/price_extractor.py`
    - **Purpose**: Extracts product prices from identified product pages
-   - **LLM Integration**: Ollama with qwen2.5:7b model (temperature 0.0, JSON format)
+   - **LLM Integration**: LLM gateway with `extract` model (temperature 0.0, JSON format)
 
 8. **CategoryExpansionAgent**
    - **File**: `src/core/category_expansion_agent.py`
@@ -331,8 +331,7 @@ The agent utilizes the `shared` package for common functionality:
 The GeoUrlValidatorAgent is responsible for filtering search results to ensure they are relevant to the specified geographic location (country and optionally city). This component sits between Phase 2 (Web Search) and Phase 2.5 (URL Validation) in the workflow, providing configurable geographic localization for better product discovery across multiple markets.
 
 #### Model Selection
-- **Primary model**: qwen3:latest
-- **Fallback model**: phi3:latest
+- **Primary model**: `extract` (Qwen3.5-9B via llama-swap)
 - **Selection rationale**: Balance of accuracy and performance for classification tasks
 - **Optimized for**: Geographic context analysis and URL classification
 - **Performance**: Low latency (< 500ms per inference)
@@ -387,11 +386,10 @@ The GeoUrlValidatorAgent is responsible for filtering search results to ensure t
 - **Purpose**: Deep content extraction and persistent storage
 
 #### LLM Integration
-- **Client**: `OllamaClient` from shared library
+- **Client**: `LLMClient` from shared library (`shared.llm_client`)
 - **Models in Use**:
-  - `qwen3:latest` (query generation, product page classification, geographic URL validation)
-  - `qwen2.5:7b` (query validation, price extraction)
-  - `phi3:latest` (fallback for geographic URL validation)
+  - `extract` (query generation, query validation, product page classification, geographic URL validation, price extraction)
+  - `vision` (screenshot-based price extraction fallback)
 - **Parameters**: 
   - `temperature`: 0.0 (for deterministic JSON outputs in validation/extraction)
   - `temperature`: 0.1 (for slight creativity in generation tasks)
@@ -450,7 +448,7 @@ Create `.env` file with:
 LOG_LEVEL=INFO
 HOST=0.0.0.0
 PORT=8000
-OLLAMA_BASE_URL=http://home.server:30080/ollama
+LLM_BASE_URL=http://home.server:30080/llm
 WEB_CRAWLER_BASE_URL=http://home.server:30080/crawler
 BRAVE_SEARCH_API_KEY=your_api_key_here
 ```
@@ -468,7 +466,7 @@ BRAVE_SEARCH_API_KEY=your_api_key_here
 - **Logging**: `shared.logging` - Thread-safe logging with loguru
 - **Database**: `shared.repositories` - Repository pattern with caching
 - **Service Clients**: 
-  - `shared.ollama_client` - LLM service integration
+  - `shared.llm_client` - LLM gateway integration
   - `shared.web_crawler_client` - Web crawling service integration
 
 ### 6.3 Monitoring and Logging
@@ -482,7 +480,7 @@ BRAVE_SEARCH_API_KEY=your_api_key_here
 
 #### Health Monitoring
 - **Endpoint**: `/health` (if implemented)
-- **Dependencies Check**: Ollama and Web Crawler service availability
+- **Dependencies Check**: LLM gateway and Web Crawler service availability
 - **Metrics**: Response times, error rates, throughput
 
 ### 6.4 Performance Considerations
@@ -540,7 +538,7 @@ BRAVE_SEARCH_API_KEY=your_api_key_here
 ## 8. Risk Assessment
 
 ### 8.1 Technical Risks
-- **LLM Service Availability**: Dependency on Ollama service uptime
+- **LLM Service Availability**: Dependency on LLM gateway (llama-swap) uptime
 - **Rate Limiting**: External search API quotas and throttling
 - **Infrastructure Dependency**: Single point of failure with home server
 

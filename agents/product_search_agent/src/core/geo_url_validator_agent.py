@@ -7,7 +7,7 @@ import os
 import hashlib
 from typing import List, Optional, Dict, Any
 from urllib.parse import urlparse
-from shared.ollama_client import OllamaClient
+from shared.llm_client import LLMClient, MODEL_EXTRACT
 from shared.logging import setup_logger
 from shared.redis_client import RedisClient
 
@@ -20,12 +20,12 @@ class GeoUrlValidatorAgent:
     Product Search Agent workflow to filter out non-relevant geographic URLs and ensure localized results.
     """
     
-    def __init__(self, llm_client: Optional[OllamaClient] = None, max_iterations: int = 3, target_url_count: int = 20, country: str = "UY", city: Optional[str] = None):
+    def __init__(self, llm_client: Optional[LLMClient] = None, max_iterations: int = 3, target_url_count: int = 20, country: str = "UY", city: Optional[str] = None):
         """
         Initialize the Geographic URL Validator Agent.
         
         Args:
-            llm_client: Optional OllamaClient instance. If None, will initialize default.
+            llm_client: Optional LLMClient instance. If None, will initialize default.
             max_iterations: Maximum number of retry iterations for search refinement.
             target_url_count: Target number of validated URLs to achieve.
             country: ISO country code (2-letter) or country name. Defaults to "UY" (Uruguay).
@@ -199,14 +199,14 @@ class GeoUrlValidatorAgent:
         self.logger.info(f"Initialized geographic patterns for {self.country}: "
                         f"{len(self.country_domains)} TLDs, {len(self.known_sites)} known sites")
     
-    def _initialize_default_llm(self) -> OllamaClient:
+    def _initialize_default_llm(self) -> LLMClient:
         """
         Initialize the default LLM client with fallback model selection.
         
         Returns:
-            OllamaClient: Configured client instance.
+            LLMClient: Configured client instance.
         """
-        return OllamaClient(model="qwen3:latest")
+        return LLMClient(model=MODEL_EXTRACT)
     
     def _setup_logging(self):
         """

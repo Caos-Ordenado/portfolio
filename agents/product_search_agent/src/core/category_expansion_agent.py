@@ -5,7 +5,7 @@ import os
 
 from shared.logging import setup_logger
 from shared.web_crawler_client import WebCrawlerClient
-from shared.ollama_client import OllamaClient
+from shared.llm_client import LLMClient, MODEL_EXTRACT
 from shared.renderer_client import RendererClient
 from shared.utils import same_domain, dedupe_urls_preserve_order
 from .batch_content_retriever import BatchContentRetriever
@@ -54,10 +54,10 @@ Example: [1, 3, 5] means URLs 1, 3, and 5 are product pages.
 Return empty array [] if none are product pages."""
 
                 try:
-                    async with OllamaClient() as llm:
+                    async with LLMClient() as llm:
                         response = await llm.generate(
                             prompt=prompt,
-                            model="qwen2.5:7b",
+                            model=MODEL_EXTRACT,
                             temperature=0.0,
                             format="json"
                         )

@@ -2,7 +2,9 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
-  - argocd
+  # argocd is not deployed on caos; apply it on its own with its secrets:
+  #   kubectl apply -k k8s/argocd
+  - observability
   - dozzle
   - loki
   - promtail
@@ -14,7 +16,7 @@ resources:
   - maintenance
   - web_crawler
   - renderer
-  - ollama
+  - llama
   - openwebui
   - openwebui_tools
   - traefik

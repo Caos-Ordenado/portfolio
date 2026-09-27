@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llama
+  namespace: default
+  labels:
+    app: llama
+    tier: inference
+    environment: home-lab
+    version: v260-b11206
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate  # Single GPU: never run two pods at once
+  selector:
+    matchLabels:
+      app: llama
+  template:
+    metadata:
+      labels:
+        app: llama
+        tier: inference
+        environment: home-lab
+        version: v260-b11206
+      annotations:
+        # Bump to force a restart after editing configmap.yaml (subPath mounts don't hot-reload)
+        llama/config-revision: "18"
+    spec:
+      runtimeClassName: nvidia
+      initContainers:
+      - name: init-models-dir
+        image: busybox:1.37
+        command: ['sh', '-c', 'mkdir -p /models && chown 10001:10001 /models']
+        securityContext:
+          runAsUser: 0
+        volumeMounts:
+        - name: models
+          mountPath: /models
+      containers:
+      - name: llama-swap
+        # llama-swap v260 + llama.cpp b11206, built on CUDA 12.8.1 (needs NVIDIA driver >= 570).
+        # Avoid CUDA 13.2 builds (broken low-bit Qwen3.6 quants).
+        image: ghcr.io/mostlygeek/llama-swap:v260-cuda-b11206-non-root
+        ports:
+        - name: http
+          containerPort: 8080
+        resources:
+          requests:
+            # Anonymous RSS is 1.5-6GB; weights are mmap'd page cache (reclaimable).
+            # Keeps >=8GB guaranteed for the other home-lab services on caos.
+            memory: "8Gi"
+            cpu: "8"
+            nvidia.com/gpu: "1"
+          limits:
+            memory: "24Gi"
+            cpu: "24"
+            nvidia.com/gpu: "1"
+        env:
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: "all"
+        - name: NVIDIA_DRIVER_CAPABILITIES
+          value: "compute,utility"
+        # Keep CPU-resident MoE experts in the mmap'd file instead of a second pinned
+        # host copy (otherwise ~17GB is duplicated and the node starts swapping)
+        - name: GGML_CUDA_NO_PINNED
+          value: "1"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 20
+          timeoutSeconds: 5
+        securityContext:
+          runAsUser: 10001
+          runAsGroup: 10001
+          allowPrivilegeEscalation: false
+        volumeMounts:
+        - name: config
+          mountPath: /app/config.yaml
+          subPath: config.yaml
+          readOnly: true
+        - name: models
+          mountPath: /models
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: llama-swap-config
+      - name: models
+        persistentVolumeClaim:
+          claimName: llama-models-pvc

@@ -78,7 +78,7 @@ The GeoUrlValidatorAgent is responsible for validating search result URLs to ens
 
 ### Features
 - Domain pattern matching for country-specific TLDs (e.g., .uy, .com.uy for Uruguay; .ar, .com.ar for Argentina)
-- LLM-based contextual analysis using the deepseek-r1:1.5b model with geographic prompts
+- LLM-based contextual analysis using the `extract` model alias with geographic prompts
 - Business name pattern recognition for local entities per country
 - Geographic indicator detection for specified country/city
 - Multi-country support: UY, AR, BR, CL, CO, PE, EC, MX, US, ES
@@ -87,8 +87,8 @@ The GeoUrlValidatorAgent is responsible for validating search result URLs to ens
 
 ### Model Integration
 
-The validator uses the deepseek-r1:1.5b model for contextual analysis of URLs. This lightweight model was chosen for its:
-- Low latency (average response time < 500ms)
+The validator uses the `extract` model alias (Qwen3.5-9B, fully on GPU, thinking off, served by llama-swap) for contextual analysis of URLs. This model was chosen for its:
+- Low latency (fits fully in VRAM; no model swap when the rest of the pipeline also uses `extract`)
 - Efficient resource usage
 - Strong performance on geographic entity recognition
 - Multi-language support (Spanish, Portuguese, English)
@@ -231,7 +231,7 @@ curl "http://localhost:8000/search?product=laptop&country=BR&city=São Paulo"
 
 ### Prerequisites
 - Python 3.8+
-- Access to home server infrastructure (Ollama, Web Crawler)
+- Access to home server infrastructure (LLM gateway, Web Crawler)
 - Tailscale VPN connection
 
 ### Installation
@@ -249,7 +249,7 @@ Create `.env` file (see `env.example`) with:
 LOG_LEVEL=INFO
 HOST=0.0.0.0
 PORT=8000
-OLLAMA_BASE_URL=http://home.server:30080/ollama
+LLM_BASE_URL=http://home.server:30080/llm
 WEB_CRAWLER_BASE_URL=http://home.server:30080/crawler
 BRAVE_SEARCH_API_KEY=your_api_key_here
 
@@ -280,7 +280,7 @@ LOG_SENSITIVE_CONFIG=false
 ## Dependencies
 - **FastAPI**: Web framework for API development
 - **Shared Library**: Internal utilities for logging, database access, and service clients
-- **Ollama Integration**: LLM services (llama3.2, deepseek-r1:1.5b)
+- **LLM Gateway Integration**: local llama-swap + llama.cpp via `shared.llm_client.LLMClient` (`extract`, `vision` aliases)
 - **Web Crawler Service**: Deep content extraction
 - **Brave Search API**: External search functionality
 
@@ -299,13 +299,15 @@ For detailed technical specifications, see [`prd/README.md`](prd/README.md).
 
 ## Current LLM Model Configuration
 
-- **Query Generation**: `qwen3:latest` (temperature 0.0, JSON format)
-- **Query Validation**: `qwen2.5:7b` (temperature 0.0, JSON format)
-- **Product Page Classification**: `qwen3:latest` (temperature 0.1, JSON format)
-- **Geographic URL Validation**: `qwen3:latest` (temperature 0.0, JSON format)
-- **Price Extraction**: `qwen2.5:7b` (temperature 0.0, JSON format)
+All text steps use the `extract` alias (`MODEL_EXTRACT`, Qwen3.5-9B, thinking off) served by llama-swap at `LLM_BASE_URL` (default `http://home.server:30080/llm`); the screenshot price fallback uses `vision` (`MODEL_VISION`, Gemma 4 26B-A4B). llama-swap keeps one model loaded at a time, so vision fallbacks trigger a model swap.
+
+- **Query Generation**: `extract` (temperature 0.0, JSON format)
+- **Query Validation**: `extract` (temperature 0.0, JSON format)
+- **Product Page Classification**: `extract` (temperature 0.1, JSON format)
+- **Geographic URL Validation**: `extract` (temperature 0.0, JSON format)
+- **Price Extraction**: `extract` (temperature 0.0, JSON format); `vision` for screenshot fallback
 
 All LLM calls use strict JSON output via `format="json"` for reliable structured responses.
 
 ## Dependencies
-- **Ollama Integration**: LLM services (qwen3:latest, qwen2.5:7b)
+- **LLM Gateway Integration**: llama-swap aliases (`extract`, `vision`)

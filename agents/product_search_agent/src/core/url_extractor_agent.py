@@ -2,14 +2,14 @@ from typing import List, Optional, Dict, Any
 import re
 from urllib.parse import urlparse
 from shared.logging import setup_logger
-from shared.ollama_client import OllamaClient
+from shared.llm_client import LLMClient, MODEL_EXTRACT
 from src.api.models import BraveSearchResult, ExtractedUrlInfo, BraveApiHit
 from src.core.utils import sanitize_ecommerce_url
 
 logger = setup_logger("url_extractor_agent")
 
 class UrlExtractorAgent:
-    def __init__(self, llm_threshold: int = 20, model_name: str = "qwen3:latest", temperature: float = 0.1):
+    def __init__(self, llm_threshold: int = 20, model_name: str = MODEL_EXTRACT, temperature: float = 0.1):
         """
         Initialize UrlExtractorAgent with pre-filtering capabilities.
         
@@ -231,7 +231,7 @@ class UrlExtractorAgent:
         logger.info(f"Applying LLM bulk filtering to {len(urls)} URLs (threshold: {self.llm_threshold})")
         
         try:
-            async with OllamaClient(model=self.model_name) as llm:
+            async with LLMClient(model=self.model_name) as llm:
                 # Prepare URLs for bulk classification
                 url_list = [{"url": url_info.url, "title": url_info.title or ""} for url_info in urls]
                 

@@ -16,7 +16,7 @@ Open WebUI uses root-level paths (`/api`, `/ws`, `/_app`, `/assets`) and does **
 <TAILSCALE_IP>  webui.home.server
 ```
 
-Use the same IP as `home.server` (your Tailscale machine IP). This does not make Open WebUI the main service—Traefik routes by host header; other services remain at `home.server:30080/ollama`, `home.server:30080/crawler`, etc.
+Use the same IP as `home.server` (your Tailscale machine IP). This does not make Open WebUI the main service—Traefik routes by host header; other services remain at `home.server:30080/llm`, `home.server:30080/crawler`, etc.
 
 ### Public access (`https://chat.reyops.com/`)
 
@@ -111,7 +111,6 @@ Generate and apply `openwebui-secrets` using the repo secret generator:
 2. Select the `openwebui.template.yaml` template
 3. Provide values for:
    - `__OPENWEBUI_DATABASE_URL__` (see above)
-   - `__OLLAMA_BASE_URL__` (recommended: `http://ollama.default.svc.cluster.local:11434`)
    - `WEBUI_SECRET_KEY` is generated automatically via `__SERVER_SECRET_KEY__`
 
 `WEBUI_URL` is pre-set to **`https://chat.reyops.com/`** for OAuth/SSO and public links. Use private `http://webui.home.server:30080/` in the browser when on Tailscale without public DNS.

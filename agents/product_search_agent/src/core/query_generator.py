@@ -1,6 +1,6 @@
 import json
 from shared.logging import setup_logger
-from shared.ollama_client import OllamaClient
+from shared.llm_client import LLMClient, MODEL_EXTRACT
 from shared.utils import strip_json_code_block, fix_truncated_json
 from shared.utils.json_utils import extract_queries_with_regex
 
@@ -40,10 +40,10 @@ Ensure that each query string within the JSON array is a single line and does no
 
 
 class QueryGeneratorAgent:
-    def __init__(self, model_name="qwen3:latest", temperature=0.1):
+    def __init__(self, model_name=MODEL_EXTRACT, temperature=0.1):
         self.model_name = model_name
         self.temperature = temperature
-        self.llm_client = OllamaClient()
+        self.llm_client = LLMClient()
         logger.info(f"QueryGeneratorAgent initialized with model: {model_name}, temp: {temperature}")
 
     async def __aenter__(self):
@@ -71,7 +71,7 @@ class QueryGeneratorAgent:
                 temperature=0.0,
                 format="json"
             )
-            logger.debug(f"Ollama response: {raw_llm_response}")
+            logger.debug(f"LLM response: {raw_llm_response}")
             
             clean_response = strip_json_code_block(raw_llm_response)
             queries = self._parse_queries_response(clean_response)
@@ -131,9 +131,9 @@ class QueryGeneratorAgent:
             elif isinstance(potential_list, dict) and isinstance(potential_list.get("queries"), list):
                 queries = potential_list["queries"]
             else:
-                raise ValueError("Ollama did not return a JSON array or {queries: [...]}.")
+                raise ValueError("LLM did not return a JSON array or {queries: [...]}.")
         else:
-            raise ValueError("Ollama did not return a JSON array or {queries: [...]}.")
+            raise ValueError("LLM did not return a JSON array or {queries: [...]}.")
         
         # Filter to only valid string queries
         if not all(isinstance(q, str) for q in queries):

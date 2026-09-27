@@ -40,3 +40,6 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["shared*"] 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

@@ -1,7 +1,7 @@
 import json
 from typing import List, Dict, Any
 from shared.logging import setup_logger
-from shared.ollama_client import OllamaClient
+from shared.llm_client import LLMClient, MODEL_EXTRACT
 import re
 
 logger = setup_logger("query_validator")
@@ -74,10 +74,10 @@ def strip_json_code_block(text: str) -> str:
     return text
 
 class QueryValidatorAgent:
-    def __init__(self, model_name="qwen2.5:7b", temperature=0.0):
+    def __init__(self, model_name=MODEL_EXTRACT, temperature=0.0):
         self.model_name = model_name
         self.temperature = temperature
-        self.llm_client = OllamaClient()
+        self.llm_client = LLMClient()
         logger.info(f"QueryValidatorAgent initialized with model: {model_name}, temp: {temperature}")
 
     async def __aenter__(self):
@@ -109,9 +109,9 @@ class QueryValidatorAgent:
                 temperature=0.0,
                 format="json"
             )
-            logger.debug(f"Validator Ollama raw response: {raw_llm_response}")
+            logger.debug(f"Validator LLM raw response: {raw_llm_response}")
             cleaned_response = strip_json_code_block(raw_llm_response)
-            logger.debug(f"Validator Ollama cleaned response: {cleaned_response}")
+            logger.debug(f"Validator LLM cleaned response: {cleaned_response}")
             
             validation_data = json.loads(cleaned_response)
             

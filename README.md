@@ -18,7 +18,7 @@ This repository demonstrates professional capabilities through a live, self-host
 ### Live Infrastructure (24/7)
 - **8+ Microservices** deployed on Kubernetes
 - **AI agents + services** for web crawling, rendering, and product search
-- **GPU-Accelerated LLM** inference with Ollama
+- **GPU-Accelerated LLM** inference with llama-swap + llama.cpp (fully local, OpenAI-compatible)
 - **Comprehensive Monitoring** via Prometheus, Grafana, and Loki
 - **Production Security** with zero-trust architecture
 
@@ -26,7 +26,7 @@ This repository demonstrates professional capabilities through a live, self-host
 - **Orchestration**: MicroK8s, Traefik Ingress, Kustomize
 - **Backend**: Python (FastAPI, AsyncIO), Node.js
 - **Data Layer**: PostgreSQL + pgvector, Redis
-- **AI/ML**: Ollama LLM, Vision Models, Custom Agents
+- **AI/ML**: llama.cpp via llama-swap (Qwen3.6, gpt-oss, Gemma 4 vision), Custom Agents
 - **Observability**: Prometheus, Grafana, Loki, Promtail
 - **Security**: TLS/SSL, Secret Management
 
@@ -59,7 +59,7 @@ flowchart TB
     Web[web_default]
     WebCrawler[web-crawler_default]
     Renderer[renderer_default]
-    Ollama[ollama_default]
+    Llama[llama_default]
     Dozzle[dozzle_observability]
     Grafana[grafana_observability]
     OpenWebUI[openwebui_default]
@@ -68,7 +68,7 @@ flowchart TB
   TraefikWeb -->|"Host www.reyops.com, PathPrefix /"| Web
   TraefikWeb -->|"Host www.reyops.com, PathPrefix /crawler (priority 200)"| WebCrawler
   TraefikWeb -->|"PathPrefix /renderer"| Renderer
-  TraefikWeb -->|"PathPrefix /ollama"| Ollama
+  TraefikWeb -->|"PathPrefix /llm"| Llama
   TraefikWeb -->|"PathPrefix /logs"| Dozzle
   TraefikWeb -->|"PathPrefix /grafana"| Grafana
 
@@ -108,7 +108,7 @@ This live site showcases the infrastructure and provides links to:
 - PostgreSQL persistence with caching
 - Redis-based performance optimization
 - Concurrent task processing
-- Vision extraction endpoint (`/extract-vision`) via Renderer + Ollama
+- Vision extraction endpoint (`/extract-vision`) via Renderer + LLM gateway (`vision` model)
 - Memory backoff for resource protection
 - Optional robots.txt enforcement
 - URL filtering (allowed_domains, exclude_patterns)
@@ -144,7 +144,7 @@ This live site showcases the infrastructure and provides links to:
 - Repository pattern implementation
 - Centralized logging system
 - Install path: `shared/shared/` (`pip install -e shared/shared`)
-- Service clients: WebCrawlerClient, RendererClient, OllamaClient, RedisClient
+- Service clients: WebCrawlerClient, RendererClient, LLMClient, RedisClient
 
 ## 💼 Professional Context
 
@@ -191,7 +191,7 @@ This infrastructure represents real-world implementation of:
 │   ├── traefik/
 │   ├── web_crawler/
 │   ├── renderer/
-│   ├── ollama/
+│   ├── llama/
 │   ├── openwebui/
 │   └── openwebui_tools/
 ├── future_plans/

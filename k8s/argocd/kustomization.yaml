@@ -7,8 +7,8 @@ resources:
   - namespace.yaml
   - rbac.yaml
   - configmaps.yaml
-  # secrets.yaml - Applied separately from k8s/secrets/generated/ (not in Git)
-  - redis-secret.yaml
+  # secrets.yaml and redis-secret (key: redis-password, namespace argocd) are Secrets:
+  # apply them separately from k8s/secrets/generated/ (not in Git)
   - services.yaml
   - deployments.yaml
   - crds.yaml

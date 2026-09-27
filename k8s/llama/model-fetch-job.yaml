@@ -1,0 +1,63 @@
+# One-shot download of the GGUF catalog into llama-models-pvc.
+# Not part of kustomization.yaml; run manually:
+#   kubectl delete job llama-model-fetch --ignore-not-found
+#   kubectl apply -f portfolio/k8s/llama/model-fetch-job.yaml
+#   kubectl logs -f job/llama-model-fetch
+# Files already present are skipped by `hf download`.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: llama-model-fetch
+  namespace: default
+  labels:
+    app: llama
+    tier: inference
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: llama-model-fetch
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+      containers:
+      - name: fetch
+        image: python:3.12-slim
+        env:
+        - name: HOME
+          value: /tmp
+        - name: HF_HUB_DISABLE_TELEMETRY
+          value: "1"
+        # hf-xet buffers chunks in RAM; cap parallelism so it stays under the memory limit
+        - name: HF_XET_NUM_CONCURRENT_RANGE_GETS
+          value: "8"
+        command:
+        - sh
+        - -ec
+        - |
+          pip install --quiet --user "huggingface_hub[hf_xet]>=0.34"
+          HF=/tmp/.local/bin/hf
+          $HF download unsloth/Qwen3.6-35B-A3B-GGUF Qwen3.6-35B-A3B-UD-Q4_K_M.gguf --local-dir /models/qwen3.6-35b-a3b
+          $HF download unsloth/gemma-4-26B-A4B-it-qat-GGUF gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf mmproj-F16.gguf --local-dir /models/gemma4-26b-a4b
+          $HF download ggml-org/gpt-oss-20b-GGUF gpt-oss-20b-MXFP4.gguf --local-dir /models/gpt-oss-20b
+          $HF download unsloth/Qwen3.5-9B-GGUF Qwen3.5-9B-Q4_K_M.gguf --local-dir /models/qwen3.5-9b
+          rm -rf /models/*/.cache
+          du -sh /models/*
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "1"
+          limits:
+            memory: "6Gi"
+            cpu: "4"
+        volumeMounts:
+        - name: models
+          mountPath: /models
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: llama-models-pvc
