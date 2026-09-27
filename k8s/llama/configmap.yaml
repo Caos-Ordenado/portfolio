@@ -16,7 +16,7 @@ data:
   config.yaml: |
     healthCheckTimeout: 300
     logLevel: info
-    logToStdout: "proxy,upstream"
+    logToStdout: "proxy,upstream,http"
     # Do not keep request/response bodies in memory (scraped pages, prompts)
     captureBuffer: 0
     # Unload after 30 minutes idle

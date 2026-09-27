@@ -25,7 +25,7 @@ spec:
         version: v260-b11206
       annotations:
         # Bump to force a restart after editing configmap.yaml (subPath mounts don't hot-reload)
-        llama/config-revision: "18"
+        llama/config-revision: "19"
     spec:
       runtimeClassName: nvidia
       initContainers:

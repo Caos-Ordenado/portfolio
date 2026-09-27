@@ -26,7 +26,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "count_over_time({job=\"applications\", container=\"llama-swap\"} |= \"POST\" [5m])"
+              "expr": "count_over_time({job=\"applications\", filename=~\".*_llama-swap-.*\"} |= \"POST /v1/chat/completions\" [5m])"
             }
           ]
         },
@@ -38,7 +38,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "count_over_time({job=\"applications\", container=\"web-crawler\"} |= \"health\" [5m])"
+              "expr": "count_over_time({job=\"applications\", filename=~\".*_web-crawler-.*\"} |= \"health\" [5m])"
             }
           ]
         },
@@ -50,7 +50,7 @@ data:
           "targets": [
             {
               "refId": "A", 
-              "expr": "count_over_time({job=\"applications\", container=\"renderer\"} |= \"HTTP\" [5m])"
+              "expr": "count_over_time({job=\"applications\", filename=~\".*_renderer-.*\"} |= \"HTTP\" [5m])"
             }
           ]
         },
