@@ -2,7 +2,7 @@ from typing import List, Optional, Any, Dict
 from pydantic import BaseModel, Field
 
 class ProductSearchRequest(BaseModel):
-    query: str = Field(..., description="Product to search for", example="laptop")
+    query: str = Field(..., description="Product to search for", examples=["laptop"])
     country: str = Field("UY", description="Country code for geographic URL validation")
     city: Optional[str] = Field(None, description="Optional city name for more specific validation")
     max_queries: Optional[int] = Field(5, description="Maximum number of search queries to generate")
@@ -101,7 +101,7 @@ class ProductSearchResponse(BaseModel):
 
 class PipelineSearchRequest(BaseModel):
     """Request model for pipeline-based product search."""
-    query: str = Field(..., description="Product to search for", example="laptop")
+    query: str = Field(..., description="Product to search for", examples=["laptop"])
     country: str = Field("UY", description="Country code for geographic URL validation")
     city: Optional[str] = Field(None, description="Optional city name for more specific validation")
     max_queries: Optional[int] = Field(5, description="Maximum number of search queries to generate")

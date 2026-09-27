@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from dotenv import load_dotenv
 from shared import setup_logger
@@ -15,7 +16,17 @@ try:
 except Exception:
     PLAYWRIGHT_AVAILABLE = False
 
-app = FastAPI(title="Renderer Service", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Startup/shutdown hooks (replaces the deprecated @app.on_event handlers)."""
+    await on_startup()
+    try:
+        yield
+    finally:
+        await on_shutdown()
+
+
+app = FastAPI(lifespan=lifespan, title="Renderer Service", version="0.1.0")
 app.include_router(router)
 
 
@@ -43,7 +54,6 @@ async def _cleanup_daemon():
         await asyncio.sleep(interval)
 
 
-@app.on_event("startup")
 async def on_startup():
     app.state.cleanup_task = asyncio.create_task(_cleanup_daemon())
     if not PLAYWRIGHT_AVAILABLE:
@@ -61,7 +71,6 @@ async def on_startup():
         app.state.browser = None
 
 
-@app.on_event("shutdown")
 async def on_shutdown():
     try:
         if getattr(app.state, "browser", None):

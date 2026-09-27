@@ -7,7 +7,7 @@ from shared.repositories.webpage import WebPageRepository
 from shared.models.webpage import WebPage # The SQLAlchemy model
 
 # We'll define a Pydantic model for the tool's output, mapping from WebPage
-from pydantic import BaseModel as PydanticBaseModel, Field
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field
 
 logger = setup_logger("product_search_agent.web_crawler_data_retrieval_service") # Renamed logger
 
@@ -28,10 +28,8 @@ class RetrievedPageData(PydanticBaseModel):
     crawled_at: Optional[str] = None
     last_modified: Optional[str] = None
 
-    class Config:
-        orm_mode = True
-        from_attributes = True # For Pydantic v2
-        allow_population_by_field_name = True # To allow alias "full_text"
+    # from_attributes: build from the SQLAlchemy WebPage; populate_by_name: allow alias "full_text"
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     @classmethod
     def from_shared_webpage(cls, webpage: WebPage) -> "RetrievedPageData":

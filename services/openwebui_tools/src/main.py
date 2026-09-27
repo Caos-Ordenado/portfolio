@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import asyncio
 import os
 from typing import Any, Dict, Optional
@@ -57,10 +58,19 @@ def _normalize_result(endpoint: str, data: Any) -> Any:
     return data
 
 
-app = FastAPI(title="Open WebUI Tools Proxy", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Startup/shutdown hooks (replaces the deprecated @app.on_event handlers)."""
+    await _startup()
+    try:
+        yield
+    finally:
+        await _shutdown()
 
 
-@app.on_event("startup")
+app = FastAPI(lifespan=lifespan, title="Open WebUI Tools Proxy", version="0.1.0")
+
+
 async def _startup() -> None:
     # NOTE: extract-vision can take >20s (renderer + vision model), so keep this generous.
     timeout = ClientTimeout(total=HTTP_TIMEOUT_SECONDS)
@@ -70,7 +80,6 @@ async def _startup() -> None:
     )
 
 
-@app.on_event("shutdown")
 async def _shutdown() -> None:
     session: Optional[aiohttp.ClientSession] = getattr(app.state, "http", None)
     if session:

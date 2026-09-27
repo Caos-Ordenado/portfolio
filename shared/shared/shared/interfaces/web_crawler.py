@@ -3,7 +3,7 @@ Shared API interfaces (DTOs) for the Web Crawler service.
 """
 
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from urllib.parse import urlparse
 
 
@@ -37,7 +37,8 @@ class SingleCrawlRequest(BaseModel):
     url: str = Field(..., description="URL to crawl")
     timeout: Optional[int] = Field(default=180000, gt=0)
 
-    @validator('url')
+    @field_validator('url')
+    @classmethod
     def validate_url(cls, v):
         result = urlparse(v)
         if not all([result.scheme, result.netloc]):
@@ -61,7 +62,8 @@ class VisionExtractRequest(BaseModel):
     )
     timeout: Optional[int] = Field(default=60000, gt=0)
 
-    @validator('url')
+    @field_validator('url')
+    @classmethod
     def validate_url2(cls, v):
         result = urlparse(v)
         if not all([result.scheme, result.netloc]):

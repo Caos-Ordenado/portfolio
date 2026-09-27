@@ -22,6 +22,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Record the deployed tag in git: commit ONLY the manifest (other local changes are left alone)
+# and push it. Set DEPLOY_PUSH=0 to commit without pushing, DEPLOY_COMMIT=0 to skip both.
+pin_manifest_in_git() {
+  [ "${DEPLOY_COMMIT:-1}" = "1" ] || { echo "ℹ️  DEPLOY_COMMIT=0: remember to commit $DEPLOYMENT_FILE"; return 0; }
+  if git diff --quiet -- "$DEPLOYMENT_FILE"; then return 0; fi
+  git commit -q -m "Deploy ${IMAGE_NAME}:${IMAGE_TAG}" -- "$DEPLOYMENT_FILE"
+  echo "📝 Committed $DEPLOYMENT_FILE ($(git rev-parse --short HEAD))"
+  if [ "${DEPLOY_PUSH:-1}" = "1" ]; then
+    git push -q origin HEAD && echo "⬆️  Pushed to origin" || echo "⚠️  Push failed; run 'git push' manually"
+  fi
+}
+
 echo "🚀 Starting deployment process..."
 
 if [ ! -f ".env" ]; then
@@ -50,7 +62,7 @@ rm -f "$TEMP_DIR/web_crawler/.env" "$TEMP_DIR/shared/.env"
 echo "🏗️  Building ${IMAGE_NAME}:${IMAGE_TAG} natively on caos..."
 "$CAOS_BUILD" "$TEMP_DIR" web_crawler/Dockerfile "${IMAGE_NAME}:${IMAGE_TAG}"
 
-# Pin the new tag in the manifest so `kubectl apply -k` stays in sync (commit it)
+# Pin the new tag in the manifest so `kubectl apply -k` stays in sync (committed after a successful rollout)
 sed -i.bak -E "s|image: ${IMAGE_NAME}:[^[:space:]]+|image: ${IMAGE_NAME}:${IMAGE_TAG}|" "$DEPLOYMENT_FILE" && rm -f "$DEPLOYMENT_FILE.bak"
 
 echo "⚙️ Applying Kubernetes configurations..."
@@ -58,10 +70,12 @@ kubectl apply -k "$K8S_DIR"
 
 echo "⏳ Waiting for deployment to roll out..."
 if kubectl rollout status deployment/web-crawler -n default --timeout=300s; then
-    echo "✅ Deployment completed successfully! (${IMAGE_NAME}:${IMAGE_TAG}, remember to commit $DEPLOYMENT_FILE)"
+    pin_manifest_in_git
+    echo "✅ Deployment completed successfully! (${IMAGE_NAME}:${IMAGE_TAG})"
     echo "🌐 The web crawler is accessible at: http://home.server:30080/crawler/"
 else
     echo "❌ Deployment rollout timed out or failed"
+    git checkout -q -- "$DEPLOYMENT_FILE"
     echo "📝 Check the logs with: kubectl logs -n default -l app=web-crawler --tail=100"
     echo "↩️  Roll back with: kubectl rollout undo deployment/web-crawler -n default"
     exit 1

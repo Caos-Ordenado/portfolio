@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from shared.logging import setup_logger
@@ -10,7 +11,18 @@ from .routes import router
 logger = setup_logger("web_crawler.api")
 load_dotenv()
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Startup/shutdown hooks (replaces the deprecated @app.on_event handlers)."""
+    await startup_event()
+    try:
+        yield
+    finally:
+        await shutdown_event()
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="Web Crawler API",
     description="A high-performance web crawler with memory-adaptive features.",
     version="1.0.0",
@@ -42,7 +54,6 @@ async def cleanup_task():
             await asyncio.sleep(3600)
 
 
-@app.on_event("startup")
 async def startup_event():
     logger.info("Initializing web crawler API...")
     max_retries = 5
@@ -81,7 +92,6 @@ async def startup_event():
     logger.info("Web crawler API initialization complete")
 
 
-@app.on_event("shutdown")
 async def shutdown_event():
     if getattr(app.state, "db_context", None):
         await app.state.db_context.__aexit__(None, None, None)

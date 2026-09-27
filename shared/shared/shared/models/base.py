@@ -2,7 +2,7 @@
 Base model class for SQLAlchemy models.
 """
 
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from typing import Dict, Any
 
 class Base:
