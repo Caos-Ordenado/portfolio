@@ -1,6 +1,6 @@
 from typing import List, Optional, Any, Dict
 from pydantic import BaseModel, Field
-from langchain.tools import StructuredTool
+from langchain_core.tools import StructuredTool
 from sqlalchemy.ext.asyncio import AsyncSession # For the session
 from shared.logging import setup_logger
 # Assuming WebCrawlerDataRetrievalService is in core.web_crawler_data_retrieval_service

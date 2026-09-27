@@ -1,6 +1,6 @@
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
-from langchain.tools import StructuredTool
+from langchain_core.tools import StructuredTool
 
 # Import the shared client and its Pydantic models
 from shared.web_crawler_client import WebCrawlerClient, CrawlResponse, CrawlRequest # CrawlRequest might be useful

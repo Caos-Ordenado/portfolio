@@ -6,7 +6,7 @@ import os
 import asyncio
 from typing import Optional, Any, Dict
 import json
-import aioredis
+import redis.asyncio as aioredis  # redis-py's asyncio client (aioredis was merged into redis>=4.2)
 from .logging import setup_logger
 from contextlib import asynccontextmanager
 
@@ -75,7 +75,7 @@ class RedisClient:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit."""
         if self.client:
-            await self.client.close()
+            await self.client.aclose()
             self.client = None
             
     async def health_check(self) -> bool:
