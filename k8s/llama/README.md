@@ -13,6 +13,8 @@ Everything runs on caos. The API is only *OpenAI-compatible* in format; no exter
 | RAM | 2×16GB DDR5-5600 dual channel (~89GB/s) | bandwidth caps tok/s for CPU-resident experts |
 | Driver | NVIDIA **580+** required | image is built on CUDA 12.8.1 (driver 550 is too old) |
 
+Host setup and known hardware issues (driver, CPU frequency cap, pinned-memory leak): see `scripts/caos-host.md` in the workspace root.
+
 ## Endpoints
 
 | From | URL |
