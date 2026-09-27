@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: openwebui-tools
-          image: openwebui-tools:dev-20260927170613
+          image: openwebui-tools:dev-20260927175842
           imagePullPolicy: Never
           ports:
             - containerPort: 8000

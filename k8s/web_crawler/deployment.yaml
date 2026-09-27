@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: web-crawler
-        image: web-crawler:dev-20260927170302
+        image: web-crawler:dev-20260927175755
         imagePullPolicy: Never
         ports:
         - containerPort: 8000
