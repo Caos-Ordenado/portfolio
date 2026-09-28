@@ -117,16 +117,44 @@ Generate and apply `openwebui-secrets` using the repo secret generator:
 
 ## 3) Deploy
 
-Apply manifests:
+Open WebUI uses a pinned image and `Recreate` rollout strategy: startup migrations must not run alongside an older Open WebUI pod. Before changing the image, take a verified `pg_dump -Fc` of the `openwebui` database and back up any contents of `/app/backend/data/uploads` and `/app/backend/data/vector_db`. The current deployment does not mount a volume at `/app/backend/data`, so files there do not survive a pod replacement. The embedding-model cache there can be downloaded again.
+
+Apply manifests from the `portfolio/` directory on the **home MicroK8s** context:
 
 ```bash
 kubectl apply -k k8s/openwebui
 ```
 
+The OpenAI-compatible llama-swap connection exposes only the stable `coder`, `extract`, `reasoning` and `vision` aliases in Open WebUI. llama-swap itself also publishes the underlying model IDs with the same display names, so listing both produces duplicates. Open WebUI persists connection settings in PostgreSQL; if an existing installation already has an `openai.api_configs` value, update that connection's **Model IDs** in Admin → Connections as well (or the stored value will override `OPENAI_API_CONFIGS` on restart).
+
+Web search is enabled with the built-in `ddgs` provider. It requires outbound internet access from the Open WebUI pod; searches send the query to an external provider. Web search is separate from the `openwebui-tools` OpenAPI server (crawler, renderer, screenshot, vision extraction): the latter is an admin-configured global integration. Check Admin → Integrations for its connection; to use it in a chat, open **Integrations → Tools** beside the message box and enable it for that chat. Global tool servers are hidden in the chat until explicitly enabled. Web search also needs to be enabled for the selected model/chat.
+
+Access policy observed after this upgrade: public sign-up is enabled, but new accounts have the `pending` role until an admin approves them. The public `/api/config` confirms sign-up is visible. If open registration is not desired, change **Admin → Authentication → Sign Up** and verify `/api/config` from an unauthenticated browser; that persistent admin setting takes precedence over a manifest environment variable.
+
 ## 4) Verify
 
 - Check the UI (private): `http://webui.home.server:30080/`
-- Confirm it persists to Postgres (restart the pod and ensure state remains).
+- Check `kubectl rollout status deployment/openwebui -n default` and `kubectl logs deployment/openwebui -n default` for migration errors.
+- Check `http://webui.home.server:30080/api/version` and `https://chat.reyops.com/`.
+- Sign in and confirm existing chats, exactly four model aliases, a real web search, and a tool call through the enabled global integration. The tools proxy's OpenAPI spec is available **inside the cluster** at `http://openwebui-tools.default.svc.cluster.local:8000/openapi.json`.
+
+### Rollback after a schema migration
+
+Changing the image back is insufficient if the new version migrated PostgreSQL. For the v0.6.43 → v0.11.4 update, the verified private backups are in `~/.local/share/openwebui-backups/` on the operator's machine (`openwebui-pre-v0.11.4-20260927.dump` and `openwebui-data-pre-v0.11.4-20260927.tar`; **never** add these to git). The local `pg_restore` may be older than the server's dump format; use the PostgreSQL container's `pg_restore` and stream the archive into it. From the repository root with `kubectl` pointing at `microk8s`:
+
+```bash
+kubectl scale deployment/openwebui -n default --replicas=0
+kubectl rollout status deployment/openwebui -n default --timeout=120s
+# Stop new connections and rebuild the database, removing migrated-only tables.
+kubectl exec -n shared deployment/postgres -- sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -v ON_ERROR_STOP=1 -U admin -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '\''openwebui'\'' AND pid <> pg_backend_pid()"'
+kubectl exec -n shared deployment/postgres -- sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" dropdb -U admin openwebui && PGPASSWORD="$POSTGRES_PASSWORD" createdb -U admin -O openwebui_user openwebui'
+kubectl exec -i -n shared deployment/postgres -- sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_restore --exit-on-error -U admin -d openwebui' < "$HOME/.local/share/openwebui-backups/openwebui-pre-v0.11.4-20260927.dump"
+kubectl set image deployment/openwebui -n default openwebui=ghcr.io/open-webui/open-webui:v0.6.43
+kubectl scale deployment/openwebui -n default --replicas=1
+kubectl rollout status deployment/openwebui -n default --timeout=900s
+```
+
+Before a rollback, also revert the pinned image in `deployment.yaml` to v0.6.43 so the next apply does not re-upgrade it. The archived `uploads/` and `vector_db/` were empty of user content for this update (the SQLite vector database had zero collections); if a later update contains local data, restore it to a **persistent** `/app/backend/data` volume before restarting. Verify login, chats and both ingress URLs. Restoring the database discards changes made since the backup.
 
 ## 5) Reset admin password
 

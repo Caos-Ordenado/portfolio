@@ -6,6 +6,9 @@ metadata:
 spec:
   replicas: 1
   revisionHistoryLimit: 3
+  # Schema migrations run at startup; never overlap different app versions.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: openwebui
@@ -16,7 +19,7 @@ spec:
     spec:
       containers:
         - name: openwebui
-          image: ghcr.io/open-webui/open-webui:v0.6.43
+          image: ghcr.io/open-webui/open-webui:v0.11.4
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
@@ -24,6 +27,16 @@ spec:
           envFrom:
             - secretRef:
                 name: openwebui-secrets
+          env:
+            # List only the stable llama-swap aliases in Open WebUI, not their
+            # backing model IDs (which have identical display names).
+            - name: OPENAI_API_CONFIGS
+              value: '{"0":{"model_ids":["coder","extract","reasoning","vision"]}}'
+            # No API key is needed for the built-in DuckDuckGo search provider.
+            - name: ENABLE_WEB_SEARCH
+              value: "true"
+            - name: WEB_SEARCH_ENGINE
+              value: "ddgs"
           # NOTE: Keep probes path-agnostic because WebUI may redirect on /.
           # First boot can take several minutes (model/asset downloads); without this,
           # liveness/readiness fight slow startup and rollouts look "stuck".
@@ -57,6 +70,5 @@ spec:
             limits:
               cpu: 500m
               memory: 2Gi
-
 
 
