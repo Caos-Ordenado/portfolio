@@ -1,38 +1,27 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: open-terminal-isolation
+  name: code-agent-pr-broker-isolation
   namespace: code-agent
   labels:
-    app: open-terminal
+    app: code-agent-pr-broker
 spec:
   podSelector:
     matchLabels:
-      app: open-terminal
+      app: code-agent-pr-broker
   policyTypes:
     - Ingress
     - Egress
   ingress:
     - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: default
-          podSelector:
-            matchLabels:
-              app: openwebui
-      ports:
-        - protocol: TCP
-          port: 8000
-  egress:
-    # Only the in-namespace PR broker may receive terminal traffic on 8001.
-    - to:
         - podSelector:
             matchLabels:
-              app: code-agent-pr-broker
+              app: open-terminal
       ports:
         - protocol: TCP
           port: 8001
-    # MicroK8s CoreDNS pod; confirm labels and test DNS through kube-dns Service.
+  egress:
+    # Match open-terminal-isolation: CoreDNS pods only, not the whole namespace.
     - to:
         - namespaceSelector:
             matchLabels:
@@ -45,8 +34,7 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # GitHub git HTTPS endpoints use public IPs that change. NetworkPolicy
-    # cannot enforce FQDNs: this permits all public IPv4 on 443, NOT just GitHub.
+    # Not GitHub-only: public IPv4 HTTPS is allowed; private and Tailscale IPs are not.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0

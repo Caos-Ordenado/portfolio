@@ -6,3 +6,6 @@ resources:
   - deployment.yaml
   - pvc.yaml
   - networkpolicy.yaml
+  - pr-broker-service.yaml
+  - pr-broker-deployment.yaml
+  - pr-broker-networkpolicy.yaml

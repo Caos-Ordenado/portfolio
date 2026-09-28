@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: code-agent-pr-broker
+  namespace: code-agent
+  labels:
+    app: code-agent-pr-broker
+    tier: code-agent
+    environment: pilot
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: code-agent-pr-broker
+  template:
+    metadata:
+      labels:
+        app: code-agent-pr-broker
+        tier: code-agent
+        environment: pilot
+        version: pilot-1
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: pr-broker
+          image: code-agent-pr-broker:pilot-1
+          imagePullPolicy: Never
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+          ports:
+            - name: http
+              containerPort: 8001
+              protocol: TCP
+          env:
+            - name: GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: code-agent-github-app
+                  key: APP_ID
+            - name: GITHUB_INSTALLATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: code-agent-github-app
+                  key: INSTALLATION_ID
+            - name: GITHUB_APP_PEM_PATH
+              value: /run/secrets/github-app/private-key.pem
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          volumeMounts:
+            - name: github-app-key
+              mountPath: /run/secrets/github-app
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: github-app-key
+          secret:
+            secretName: code-agent-github-app
+            defaultMode: 0440
+            items:
+              - key: private-key.pem
+                path: private-key.pem
