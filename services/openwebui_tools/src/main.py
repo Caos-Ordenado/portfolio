@@ -88,6 +88,7 @@ async def _shutdown() -> None:
 
 @app.get("/health")
 async def health() -> Dict[str, str]:
+    """Expose the readiness check used by Kubernetes and CI smoke tests."""
     return {"status": "ok"}
 
 
@@ -150,5 +151,4 @@ async def extract_vision(request: VisionExtractRequest) -> JSONResponse:
     res = await _forward_json("POST", f"{CRAWLER_BASE_URL}/extract-vision", payload)
     # Response is already small JSON; no special normalization required
     return JSONResponse(res)
-
 
