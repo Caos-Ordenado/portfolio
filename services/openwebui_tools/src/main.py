@@ -88,6 +88,7 @@ async def _shutdown() -> None:
 
 @app.get("/health")
 async def health() -> Dict[str, str]:
+    """Report readiness for the internal tools service."""
     return {"status": "ok"}
 
 
