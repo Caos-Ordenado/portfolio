@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open-terminal
+  namespace: code-agent
+  labels:
+    app: open-terminal
+    tier: code-agent
+    environment: pilot
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: open-terminal
+  template:
+    metadata:
+      labels:
+        app: open-terminal
+        tier: code-agent
+        environment: pilot
+        version: v0-14-0
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: open-terminal
+          image: ghcr.io/open-webui/open-terminal:v0.14.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: OPEN_TERMINAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: open-terminal-api-key
+                  key: OPEN_TERMINAL_API_KEY
+          # Upstream carries sudo and a capability-bearing Python executable.
+          # Keep no-new-privileges and dropped capabilities even if that means
+          # this image cannot start; test before connecting it to Open WebUI.
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: home
+              mountPath: /home/user
+      volumes:
+        - name: home
+          persistentVolumeClaim:
+            claimName: open-terminal-home

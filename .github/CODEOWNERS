@@ -1,0 +1,7 @@
+# Deployment and privilege boundaries need owner review before reaching main.
+/.github/ @Caos-Ordenado
+/k8s/ @Caos-Ordenado
+/services/openwebui_tools/Dockerfile @Caos-Ordenado
+/services/openwebui_tools/deploy.sh @Caos-Ordenado
+/services/openwebui_tools/pyproject.toml @Caos-Ordenado
+/shared/ @Caos-Ordenado

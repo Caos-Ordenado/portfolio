@@ -1,0 +1,115 @@
+name: openwebui-tools source-only auto-merge request
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  request:
+    # No checkout, no PR code execution, no self-hosted runner, no approvals.
+    if: github.repository == 'Caos-Ordenado/portfolio' && vars.OPENWEBUI_TOOLS_BOT_LOGIN != '' && vars.OPENWEBUI_TOOLS_AUTO_MERGE_READY == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BOT_LOGIN: ${{ vars.OPENWEBUI_TOOLS_BOT_LOGIN }}
+      REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Validate live PR and protected branch before requesting auto-merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          repo = os.environ['REPO']
+          owner, name = repo.split('/')
+          number = os.environ['PR_NUMBER']
+          bot = os.environ['BOT_LOGIN']
+
+          def api(path):
+              return json.loads(subprocess.check_output(['gh', 'api', path], text=True))
+
+          def eligible(pr):
+              return (
+                  pr['state'] == 'open'
+                  and not pr['draft']
+                  and pr['user']['login'] == bot
+                  and pr['base']['ref'] == 'main'
+                  and pr['base']['repo']['full_name'] == repo
+                  and pr['head']['repo'] is not None
+                  and pr['head']['repo']['full_name'] == repo
+                  and pr['head']['repo']['id'] == pr['base']['repo']['id']
+              )
+
+          pr = api(f'repos/{repo}/pulls/{number}')
+          if not eligible(pr):
+              raise SystemExit('Not an eligible open, non-draft same-repo bot PR to main')
+          sha = pr['head']['sha']
+          settings = api(f'repos/{repo}')
+          branch = api(f'repos/{repo}/branches/main')
+          if settings.get('allow_auto_merge') is not True or branch.get('protected') is not True:
+              raise SystemExit('Auto-merge or main branch protection not enabled')
+
+          # Branch protection's required check and review must be observable.
+          # If the token cannot inspect them (or only a ruleset exists), fail closed.
+          query = '''query($owner:String!, $name:String!) {
+            repository(owner:$owner, name:$name) {
+              ref(qualifiedName:"refs/heads/main") {
+                branchProtectionRule {
+                  requiresApprovingReviews
+                  requiredStatusCheckContexts
+                }
+              }
+            }
+          }'''
+          rule_data = json.loads(subprocess.check_output([
+              'gh', 'api', 'graphql', '-f', f'query={query}', '-F', f'owner={owner}',
+              '-F', f'name={name}',
+          ], text=True))
+          rule = rule_data['data']['repository']['ref']['branchProtectionRule']
+          if not rule or not rule['requiresApprovingReviews'] or 'checks' not in rule['requiredStatusCheckContexts']:
+              raise SystemExit('Require observable owner review and the checks status on protected main')
+
+          # REST returns at most 3000 files. Reject exactly 3000 as well: it is
+          # indistinguishable from a truncated list. No paths => no merge.
+          files = []
+          for page in range(1, 31):
+              batch = api(f'repos/{repo}/pulls/{number}/files?per_page=100&page={page}')
+              if not isinstance(batch, list) or len(batch) > 100:
+                  raise SystemExit('Invalid file listing')
+              files.extend(batch)
+              if len(files) >= 3000:
+                  raise SystemExit('File listing reaches GitHub 3000-file cap')
+              if len(batch) < 100:
+                  break
+          prefix = 'services/openwebui_tools/src/'
+          if not files:
+              raise SystemExit('Empty PR file listing')
+          for item in files:
+              paths = [item['filename']]
+              if item['status'] == 'renamed':
+                  paths.append(item['previous_filename'])
+              elif 'previous_filename' in item:
+                  paths.append(item['previous_filename'])
+              if any(not path.startswith(prefix) or len(path) == len(prefix) for path in paths):
+                  raise SystemExit('PR contains a non-source path (including rename origin)')
+
+          # Do not act on stale listings or a changed PR base/author/head.
+          latest = api(f'repos/{repo}/pulls/{number}')
+          if (not eligible(latest) or latest['head']['sha'] != sha
+                  or latest['base']['sha'] != pr['base']['sha']):
+              raise SystemExit('PR changed during validation')
+          subprocess.run([
+              'gh', 'pr', 'merge', number, '--repo', repo, '--auto', '--squash',
+              '--match-head-commit', sha,
+          ], check=True)
+          PY

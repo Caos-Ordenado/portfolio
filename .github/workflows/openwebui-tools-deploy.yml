@@ -1,0 +1,103 @@
+name: openwebui-tools trusted deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openwebui-tools-caos
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    if: github.repository == 'Caos-Ordenado/portfolio'
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.allowlist.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require an exclusively service-source push
+        id: allowlist
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import subprocess
+
+          before = os.environ['BEFORE']
+          after = os.environ['AFTER']
+          if before == '0' * 40 or len(before) != 40 or len(after) != 40:
+              raise SystemExit('No known base commit; refusing deployment')
+          if subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() != after:
+              raise SystemExit('Checkout is not the pushed commit')
+          subprocess.run(['git', 'merge-base', '--is-ancestor', before, after], check=True)
+          paths = subprocess.check_output(['git', 'diff', '--name-only', '-z', before, after]).split(b'\0')
+          paths = [p for p in paths if p]
+          prefix = b'services/openwebui_tools/src/'
+          if not paths or any(not p.startswith(prefix) or len(p) == len(prefix) for p in paths):
+              print('Push includes non-allowlisted changes (or no changes); no deploy')
+          else:
+              print('Only openwebui_tools/src changed; deploy permitted')
+              with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+                  output.write('deploy=true\n')
+          PY
+
+  deploy:
+    needs: gate
+    if: needs.gate.outputs.deploy == 'true' && github.repository == 'Caos-Ordenado/portfolio' && github.ref == 'refs/heads/main'
+    # Dedicated runner on caos; never run pull_request code here.
+    runs-on: [self-hosted, linux, x64, caos-openwebui-tools]
+    timeout-minutes: 25
+    environment: caos-openwebui-tools
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Build from committed inputs and roll out existing cluster-internal Deployment
+        env:
+          COMMIT: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$COMMIT"
+          # An older queued push must not overwrite a more recent main deployment.
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$COMMIT"
+          test "$(uname -m)" = x86_64
+          command -v buildctl
+          command -v kubectl
+          CTR=/snap/microk8s/current/bin/ctr
+          test -x "$CTR"
+          # Do not create a Service or apply a potentially changed manifest.
+          test "$(kubectl -n default get service openwebui-tools -o jsonpath='{.spec.type}')" = ClusterIP
+          test "$(kubectl -n default get deployment openwebui-tools -o jsonpath='{.spec.template.spec.containers[?(@.name=="openwebui-tools")].imagePullPolicy}')" = Never
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          mkdir -p "$tmp/context"
+          # git archive excludes untracked/ignored .env and host workspace files.
+          git archive HEAD -- services/openwebui_tools/Dockerfile services/openwebui_tools/README.md services/openwebui_tools/pyproject.toml services/openwebui_tools/src shared/shared/pyproject.toml shared/shared/README.md shared/shared/shared | tar -xf - -C "$tmp/context"
+          mv "$tmp/context/services/openwebui_tools" "$tmp/context/openwebui_tools"
+          mv "$tmp/context/shared/shared" "$tmp/shared-package"
+          rmdir "$tmp/context/shared"
+          mv "$tmp/shared-package" "$tmp/context/shared"
+          # Avoid uploading repo contents into a remote Docker daemon; build locally on caos.
+          image="docker.io/library/openwebui-tools:git-${COMMIT}"
+          buildctl --addr unix:///run/buildkit/buildkitd.sock build \
+            --frontend dockerfile.v0 --local context="$tmp/context" --local dockerfile="$tmp/context" \
+            --opt filename=openwebui_tools/Dockerfile --opt platform=linux/amd64 \
+            --output "type=docker,name=${image},dest=${tmp}/image.tar"
+          "$CTR" --address /var/snap/microk8s/common/run/containerd.sock -n k8s.io images import --digests "$tmp/image.tar"
+          "$CTR" --address /var/snap/microk8s/common/run/containerd.sock -n k8s.io images inspect "$image" >/dev/null
+          kubectl -n default set image deployment/openwebui-tools "openwebui-tools=${image}"
+          if ! kubectl -n default rollout status deployment/openwebui-tools --timeout=300s; then
+            kubectl -n default rollout undo deployment/openwebui-tools
+            kubectl -n default rollout status deployment/openwebui-tools --timeout=300s || true
+            exit 1
+          fi
