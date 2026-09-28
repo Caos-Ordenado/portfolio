@@ -32,8 +32,9 @@ spec:
           type: RuntimeDefault
       containers:
         - name: open-terminal
-          image: ghcr.io/open-webui/open-terminal:v0.14.0
-          imagePullPolicy: IfNotPresent
+          # Locally built from the pinned upstream digest, without setgid or sudo.
+          image: open-terminal-hardened:0.14.0-r1
+          imagePullPolicy: Never
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
