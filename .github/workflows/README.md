@@ -33,6 +33,8 @@ outside `services/openwebui_tools/src/` (including a rename **from** outside)
 is ineligible. The full paginated file list is checked; 3000 files are rejected
 because GitHub may truncate at that limit. The live head SHA is matched at
 merge request time. No GH credentials belong in chat or the repository.
+GitHub itself rejects `--auto` if repository auto-merge is disabled; the
+minimal Actions token need not see that repository setting through REST.
 
 Activation requires a maintainer to enable GitHub auto-merge and set both
 repository variables `OPENWEBUI_TOOLS_BOT_LOGIN` to the **exact** dedicated bot

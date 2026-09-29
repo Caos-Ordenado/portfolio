@@ -54,10 +54,11 @@ jobs:
           if not eligible(pr):
               raise SystemExit('Not an eligible open, non-draft same-repo bot PR to main')
           sha = pr['head']['sha']
-          settings = api(f'repos/{repo}')
           branch = api(f'repos/{repo}/branches/main')
-          if settings.get('allow_auto_merge') is not True or branch.get('protected') is not True:
-              raise SystemExit('Auto-merge or main branch protection not enabled')
+          # GITHUB_TOKEN with minimal permissions may not receive the
+          # allow_auto_merge field. GitHub rejects --auto if it is disabled.
+          if branch.get('protected') is not True:
+              raise SystemExit('Main branch protection not enabled')
 
           # Branch protection's required check and review must be observable.
           # If the token cannot inspect them (or only a ruleset exists), fail closed.
