@@ -39,7 +39,9 @@ jobs:
           if subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() != after:
               raise SystemExit('Checkout is not the pushed commit')
           subprocess.run(['git', 'merge-base', '--is-ancestor', before, after], check=True)
-          paths = subprocess.check_output(['git', 'diff', '--name-only', '-z', before, after]).split(b'\0')
+          # Without rename detection both the removed source and added destination
+          # appear, so a rename from a protected path cannot pass the allowlist.
+          paths = subprocess.check_output(['git', 'diff', '--no-renames', '--name-only', '-z', before, after]).split(b'\0')
           paths = [p for p in paths if p]
           prefix = b'services/openwebui_tools/src/'
           if not paths or any(not p.startswith(prefix) or len(p) == len(prefix) for p in paths):
@@ -50,54 +52,65 @@ jobs:
                   output.write('deploy=true\n')
           PY
 
-  deploy:
+  build:
     needs: gate
     if: needs.gate.outputs.deploy == 'true' && github.repository == 'Caos-Ordenado/portfolio' && github.ref == 'refs/heads/main'
-    # Dedicated runner on caos; never run pull_request code here.
-    runs-on: [self-hosted, linux, x64, caos-openwebui-tools]
+    runs-on: ubuntu-latest
     timeout-minutes: 25
-    environment: caos-openwebui-tools
+    permissions:
+      contents: read
+      packages: write
+      statuses: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - name: Build from committed inputs and roll out existing cluster-internal Deployment
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build tracked inputs and publish immutable digest
+        id: publish
         env:
           COMMIT: ${{ github.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$COMMIT"
-          # An older queued push must not overwrite a more recent main deployment.
-          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$COMMIT"
-          test "$(uname -m)" = x86_64
-          command -v buildctl
-          command -v kubectl
-          CTR=/snap/microk8s/current/bin/ctr
-          test -x "$CTR"
-          # Do not create a Service or apply a potentially changed manifest.
-          test "$(kubectl -n default get service openwebui-tools -o jsonpath='{.spec.type}')" = ClusterIP
-          test "$(kubectl -n default get deployment openwebui-tools -o jsonpath='{.spec.template.spec.containers[?(@.name=="openwebui-tools")].imagePullPolicy}')" = Never
+          test -n "$GH_TOKEN"
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
           mkdir -p "$tmp/context"
-          # git archive excludes untracked/ignored .env and host workspace files.
-          git archive HEAD -- services/openwebui_tools/Dockerfile services/openwebui_tools/README.md services/openwebui_tools/pyproject.toml services/openwebui_tools/src shared/shared/pyproject.toml shared/shared/README.md shared/shared/shared | tar -xf - -C "$tmp/context"
+          export DOCKER_CONFIG="$tmp/docker-config"
+          mkdir -m 700 "$DOCKER_CONFIG"
+          # Same committed-only context as PR checks; no .env or host files.
+          git archive HEAD -- services/openwebui_tools/Dockerfile services/openwebui_tools/README.md services/openwebui_tools/pyproject.toml services/openwebui_tools/requirements.lock services/openwebui_tools/src shared/shared/pyproject.toml shared/shared/README.md shared/shared/shared | tar -xf - -C "$tmp/context"
           mv "$tmp/context/services/openwebui_tools" "$tmp/context/openwebui_tools"
           mv "$tmp/context/shared/shared" "$tmp/shared-package"
           rmdir "$tmp/context/shared"
           mv "$tmp/shared-package" "$tmp/context/shared"
-          # Avoid uploading repo contents into a remote Docker daemon; build locally on caos.
-          image="docker.io/library/openwebui-tools:git-${COMMIT}"
-          buildctl --addr unix:///run/buildkit/buildkitd.sock build \
-            --frontend dockerfile.v0 --local context="$tmp/context" --local dockerfile="$tmp/context" \
-            --opt filename=openwebui_tools/Dockerfile --opt platform=linux/amd64 \
-            --output "type=docker,name=${image},dest=${tmp}/image.tar"
-          "$CTR" --address /var/snap/microk8s/common/run/containerd.sock -n k8s.io images import --digests "$tmp/image.tar"
-          "$CTR" --address /var/snap/microk8s/common/run/containerd.sock -n k8s.io images inspect "$image" >/dev/null
-          kubectl -n default set image deployment/openwebui-tools "openwebui-tools=${image}"
-          if ! kubectl -n default rollout status deployment/openwebui-tools --timeout=300s; then
-            kubectl -n default rollout undo deployment/openwebui-tools
-            kubectl -n default rollout status deployment/openwebui-tools --timeout=300s || true
-            exit 1
-          fi
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin >/dev/null
+          image="ghcr.io/caos-ordenado/openwebui-tools:git-${COMMIT}"
+          docker buildx build --platform linux/amd64 --file "$tmp/context/openwebui_tools/Dockerfile" \
+            --tag "$image" --push --metadata-file "$tmp/metadata.json" "$tmp/context"
+          digest="$(python3 - "$tmp/metadata.json" <<'PY'
+          import json
+          import re
+          import sys
+
+          digest = json.load(open(sys.argv[1], encoding='utf-8'))['containerimage.digest']
+          if not re.fullmatch(r'sha256:[0-9a-f]{64}', digest):
+              raise SystemExit('Invalid published image digest')
+          print(digest)
+          PY
+          )"
+          # Docker handles GHCR's anonymous Bearer challenge; a raw curl gets 401 even for public images.
+          # Never reuse the authenticated Docker config to test anonymous pulls.
+          mkdir -m 700 "$tmp/anonymous-docker"
+          DOCKER_CONFIG="$tmp/anonymous-docker" docker manifest inspect "ghcr.io/caos-ordenado/openwebui-tools@${digest}" >/dev/null
+          # Publish the verified artifact identity on this commit. A failed POST fails the build.
+          gh api --method POST "repos/Caos-Ordenado/portfolio/statuses/${COMMIT}" \
+            -f state=success -f context=openwebui-tools-image \
+            -f "description=${digest}" \
+            -f "target_url=https://github.com/Caos-Ordenado/portfolio/actions/runs/${GITHUB_RUN_ID}" >/dev/null
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"

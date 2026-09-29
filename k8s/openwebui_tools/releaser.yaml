@@ -1,0 +1,151 @@
+# Standalone, opt-in controller resources; not included in either kustomization.
+# No Service/Ingress: this one-shot Job only makes outbound requests.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openwebui-tools-releaser
+  namespace: default
+  labels:
+    app: openwebui-tools-releaser
+    tier: deployment
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: openwebui-tools-releaser
+  namespace: default
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [openwebui-tools]
+    verbs: [get, patch]
+  - apiGroups: ['']
+    resources: [services]
+    resourceNames: [openwebui-tools]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openwebui-tools-releaser
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: openwebui-tools-releaser
+    namespace: default
+roleRef:
+  kind: Role
+  name: openwebui-tools-releaser
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: openwebui-tools-releaser
+  namespace: default
+  labels:
+    app: openwebui-tools-releaser
+    tier: deployment
+spec:
+  schedule: '*/10 * * * *'
+  concurrencyPolicy: Forbid
+  suspend: true
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 1200
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: openwebui-tools-releaser
+            tier: deployment
+        spec:
+          serviceAccountName: openwebui-tools-releaser
+          automountServiceAccountToken: true
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: releaser
+              # Reviewed local image manifest, imported on caos and tagged by digest.
+              image: docker.io/library/openwebui-tools-releaser@sha256:9cfc14c271a3783e661ef55f7eb50eae6db4afe921be2e10a15d1595fccabe57
+              imagePullPolicy: Never
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: [ALL]
+              env:
+                - name: PYTHONDONTWRITEBYTECODE
+                  value: '1'
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 192Mi
+---
+# Deny all inbound; outbound is limited to DNS, public IPv4 HTTPS, and the
+# read-only verified Kubernetes API ClusterIP (10.152.183.1 on MicroK8s).
+# Do not permit node/private/Tailscale destinations without a tested review.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: openwebui-tools-releaser
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: openwebui-tools-releaser
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 0.0.0.0/8
+              - 10.0.0.0/8
+              - 100.64.0.0/10 # Tailscale/CGNAT
+              - 127.0.0.0/8
+              - 169.254.0.0/16
+              - 172.16.0.0/12
+              - 192.0.0.0/24
+              - 192.0.2.0/24
+              - 192.168.0.0/16
+              - 198.18.0.0/15
+              - 198.51.100.0/24
+              - 203.0.113.0/24
+              - 224.0.0.0/4
+              - 240.0.0.0/4
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - ipBlock:
+            cidr: 10.152.183.1/32
+      ports:
+        - protocol: TCP
+          port: 443
