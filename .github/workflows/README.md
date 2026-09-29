@@ -1,22 +1,26 @@
-# openwebui-tools CI / caos pilot
+# openwebui-tools CI / GHCR build pilot
 
 This is a **scaffold, not an activated deployment**. PR checks run on GitHub-hosted
 `ubuntu-latest` without secrets or cluster access. They compile service/shared
 Python sources, syntax-check the existing deploy helper without running it,
 and build the real service Dockerfile using only the same tracked build inputs
-archived by the deploy job from the PR checkout (including GitHub's merge
+archived by the build job from the PR checkout (including GitHub's merge
 checkout when available). The hosted runner starts the image locally and
 requires successful `/health` and `/openapi.json` HTTP responses with valid
 JSON; the container is removed afterwards. The job has a 20-minute timeout
 and never passes `.env` files, host credentials, or repository secrets into the
 build context. This is a build/smoke check, not a full integration or security
 review. On pushes to `main`, a hosted
-gate compares the complete pushed commit range and allows a deploy only when
+gate compares the complete pushed commit range with `git diff --no-renames` and
+allows a build/publish only when
 **every changed path** is under `services/openwebui_tools/src/`. Mixed pushes,
 Dockerfile, workflow, deploy helper, Kubernetes manifest, and shared-package
-changes do **not** deploy (nor do empty or unknown-base pushes). Changes made
+changes do **not** publish (nor do empty or unknown-base pushes). Changes made
 outside the allowlist require a later separately reviewed source-only push to
- deploy. No `workflow_dispatch` or PR-triggered privileged job exists.
+publish. No `workflow_dispatch`, runner, kubeconfig, Tailscale connection, or
+cluster deployment job exists in this workflow. The stable workflow name is
+`openwebui-tools trusted deploy` and the publish job ID is `build` for the
+separate in-cluster controller's GitHub run polling.
 
 ### Optional source-only auto-merge request (off by default)
 
@@ -61,64 +65,75 @@ login (for a GitHub App, typically `app-slug[bot]`) and
 
 ## Operator activation (manual)
 
-1. Protect `main`: require PR review (including a trusted owner for workflow,
-   Dockerfile, shared, and deployment changes), require the `checks` PR status,
-   prohibit direct pushes and force pushes, and restrict who can edit Actions
-   workflows or administer runners. Review the repository's effective ruleset
-   before registering any runner. A merged workflow change can affect later
-   trusted pushes; path gating alone is **not** a sandbox.
-2. Register a **dedicated repository runner on caos**, with labels
-   `self-hosted`, `linux`, `x64`, `caos-openwebui-tools`. Use the official GitHub
-   runner installation steps with a short-lived registration token acquired by
-   the operator; do not store it in this repository. Restrict runner access to
-   this repository, do not share with untrusted repositories, and do not enable
-   public-fork PRs on the runner. Run under a dedicated host user with only the
-   permissions required for local BuildKit socket, MicroK8s containerd import
-   and scoped Kubernetes Deployment updates. Keep runner credentials outside
-   the checkout. Host BuildKit and Kubernetes permissions are powerful: treat
-   merged source and Docker build steps as trusted code, not as a sandbox.
-3. Create the `caos-openwebui-tools` GitHub environment restricted to `main`;
-   no environment secrets are needed. Install/verify `buildctl`, local
-   `/run/buildkit/buildkitd.sock`, `/snap/microk8s/current/bin/ctr` and
-   `kubectl` on caos. Provide the runner a local kubeconfig with only access
-   needed to read the existing `openwebui-tools` Service/Deployment and update
-   the Deployment image and watch/undo rollouts in namespace `default`; validate
-   permissions with `kubectl auth can-i`. Do not grant chat agents or PR jobs
-   BuildKit, Kubernetes or runner credentials. The runner needs egress to fetch
-   Python dependencies during build. Never place `.env` or tokens in the build
-   context; this workflow archives only committed build inputs.
-4. Confirm the existing Service is `ClusterIP`, the Deployment uses
-   `imagePullPolicy: Never`, the Dockerfile is approved and the runner's local
-   MicroK8s containerd is the cluster node where the Pod will land (on a
-   multi-node cluster, use a registry or explicit placement before enabling).
-   Confirm `git diff --name-only <before> <after>` shows only the allowed source
-   paths for the intended test merge. Inspect the Actions gate result before
-   trusting a deploy run. No workflow in this pilot commits, pushes or applies
-   manifests.
+1. Protect `main`: require PR review, the `checks` PR status, CODEOWNERS approval
+   for `.github/workflows/**`, the Dockerfile, lockfile, shared build inputs and
+   deployment manifests; prohibit direct/force pushes and restrict workflow
+   edits. The source-only gate is not a sandbox: a reviewed workflow or base
+   image change can affect later trusted builds. Keep the Dockerfile base image
+   digest pinned and runtime dependencies hashed in `requirements.lock`.
+2. Allow the repository's `GITHUB_TOKEN` to publish to
+   `ghcr.io/caos-ordenado/openwebui-tools`. Only the hosted `build` job receives
+   `packages:write` and `statuses:write`; `gate` has `contents:read` only. Set
+   the GHCR package to **public** in package settings (new packages can default
+   to private). The
+   job archives committed Dockerfile, lockfile, source and shared inputs,
+   builds `linux/amd64`, pushes `git-<40-character-main-SHA>` and records the
+   resulting `sha256:` digest. It checks anonymous `docker manifest inspect`
+   with an empty Docker config; a raw unauthenticated `curl` can receive a 401
+   challenge even when the image is public. After that check, it POSTs a commit
+   status via `gh api` on the pushed SHA: context `openwebui-tools-image`, state
+   `success`, description exactly the published `sha256:<64>` digest, target URL
+   `https://github.com/Caos-Ordenado/portfolio/actions/runs/<run-id>`. A failed
+   status POST fails `build`; a private package fails before the POST. Never
+   place tokens, kubeconfig, or `.env` in the archive or logs.
+3. Before enabling any rollout, separately review and activate the **in-cluster**
+   CronJob controller (not defined by this workflow). It must poll GitHub
+   workflow runs for this exact workflow on `main`, require a successful `build`
+   job for the **current main SHA** (not merely a successful gate or PR), and
+   require the matching `openwebui-tools-image` success status for that SHA with
+   its description equal to the public GHCR digest for `git-<SHA>` and its
+   target URL equal to the successful build run. GitHub commit statuses are
+   appendable later by other authorized writers: a status alone is not proof
+   of a successful trusted build. Restrict branch ownership, workflow edits,
+   and status-writing permissions; reject stale/out-of-order or repeat runs,
+   and pin the Deployment to the verified digest rather than a mutable tag.
+   Grant only the necessary read access to GitHub and narrowly scoped
+   Kubernetes permissions; keep credentials in cluster Secrets, not ConfigMaps,
+    GitHub secrets, or repo files. Review concurrency and safe rollback of both
+    image and pull policy. Without that controller, publishing does **not**
+    deploy. No self-hosted runner or GitHub kubeconfig is needed.
+    Home MicroK8s now runs `RBAC,Node` (previously `AlwaysAllow`). The releaser
+    identity was verified to be denied Secrets, pod exec, lists and other
+    Deployments; recheck effective permissions before any manual Job. The
+    CronJob remains suspended until a published, reviewed image is tested.
 
 ## Rollout and recovery
 
-Merge a reviewed source-only PR to protected `main`. Observe the hosted gate,
-then the dedicated caos runner's build/import/set-image/rollout. Images are
-tagged `docker.io/library/openwebui-tools:git-<40-character-commit>` and loaded
-locally; the checked-in manifest is **not** pinned automatically. Check
-`kubectl -n default rollout status deployment/openwebui-tools --timeout=300s`,
+Merge a reviewed source-only PR to protected `main` after the public package is
+configured. Confirm the `gate` and `build` job statuses, the `git-<SHA>` tag,
+the published digest, anonymous manifest inspection and matching
+`openwebui-tools-image` commit status (description digest and target run URL).
+Only a successful build for the current `main` SHA is eligible; no stale or
+repeat release. Do not turn on the separate in-cluster controller until its
+authorization, SHA/digest verification,
+rollout and rollback have been reviewed. The existing Service must remain
+`ClusterIP`; no new Traefik route, public application endpoint or Tailscale
+entrypoint is created. Verify nodes can pull the public `linux/amd64` digest.
+The checked-in manifest still uses a local dev image and `Never`: do **not**
+re-apply it over a controller-managed rollout without reconciling image drift
+in a separately reviewed change.
+
+To stop publishing, disable the workflow or block merges to `main`; to stop
+rollouts, suspend the in-cluster CronJob first. Failed builds do not need a
+cluster rollback. If a controller rollout fails, inspect
+`kubectl -n default rollout history deployment/openwebui-tools` and restore the
+recorded known-good image **and pull policy** with operator credentials (or use
+`kubectl -n default rollout undo deployment/openwebui-tools --to-revision=<known-good>`
+after checking that revision restores both). Keep the previous digest available
+through recovery. Confirm `kubectl -n default rollout status
+deployment/openwebui-tools --timeout=300s`,
 `kubectl -n default get deployment openwebui-tools -o wide`,
 `kubectl -n default get service openwebui-tools -o jsonpath='{.spec.type}'`
-(`ClusterIP`), and from within the cluster query
-`http://openwebui-tools.default.svc.cluster.local:8000/health`. Inspect
-`kubectl -n default logs -l app=openwebui-tools --tail=100` for errors. No new
-Traefik path, public endpoint, or Tailscale entrypoint is created.
-
-If rollout fails, the workflow attempts `kubectl -n default rollout undo
-deployment/openwebui-tools`. For manual recovery, pause/disable this workflow
-or take the dedicated runner offline to prevent a subsequent push racing the
-rollback; run `kubectl -n default rollout history deployment/openwebui-tools`,
-then `kubectl -n default rollout undo deployment/openwebui-tools` (or
-`--to-revision=<known-good>`), and verify rollout status and in-cluster health.
-Retain the previous image in local containerd until recovery is complete.
-Because the checked-in manifest retains its old image, a subsequent
-`kubectl apply -k k8s/openwebui_tools` can revert the CI image: reconcile this
-drift manually in a separately reviewed change before using manifest apply.
-If build fails before set-image, no rollback is required. Disable the runner
-or remove the workflow to stop the pilot; no external ingress rollback exists.
+(`ClusterIP`), in-cluster
+`http://openwebui-tools.default.svc.cluster.local:8000/health`, and
+`kubectl -n default logs -l app=openwebui-tools --tail=100` for errors.

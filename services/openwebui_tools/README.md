@@ -43,4 +43,27 @@ cd services/openwebui_tools
 ./start.sh
 ```
 
+## Container dependency lock
 
+The Linux amd64 container uses a reviewed Python 3.13 slim image digest and installs
+only wheel distributions pinned with hashes in `requirements.lock`. The lock is the
+runtime dependency union of `shared/shared/pyproject.toml` and this service's
+`pyproject.toml` (excluding dev extras). Local source is imported through
+`PYTHONPATH`, not installed with editable pip/build dependencies. When either
+project's runtime requirements change, review and regenerate the lock from the
+`portfolio/` directory with `uv`:
+
+```bash
+uv pip compile shared/shared/pyproject.toml services/openwebui_tools/pyproject.toml \
+  --python-version 3.13 --python-platform x86_64-manylinux_2_17 \
+  --only-binary :all: --generate-hashes \
+  --no-emit-package shared --no-emit-package openwebui-tools --no-annotate \
+  -o services/openwebui_tools/requirements.lock
+```
+
+Review the resolved versions and build the image with the existing context layout:
+`shared/` contains the shared package and `openwebui_tools/` contains this service.
+The committed-only CI context must explicitly archive
+`services/openwebui_tools/requirements.lock` alongside the Dockerfile and source;
+otherwise Docker's `COPY` fails. The CI workflow archive and its source-only deploy
+gate are owned separately from this service; coordinate their update before release.
