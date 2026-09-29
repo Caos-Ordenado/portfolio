@@ -29,7 +29,7 @@ in `portfolio/services/openwebui_tools_releaser/`. The image is built locally
  verify the tag's digest with `ctr images ls`, and create the matching digest
  alias in containerd before starting a Job. A reviewed change to the controller
  requires a new manual build/digest and manifest review; never silently reuse
- `pilot-1` for changed source.
+  `pilot-2` for changed source.
 
 ```sh
 kubectl config current-context # must be microk8s
@@ -43,11 +43,16 @@ kubectl create --dry-run=client -f portfolio/k8s/openwebui_tools/releaser.yaml -
 
 NetworkPolicy allows CoreDNS pod port 53 UDP/TCP, public IPv4 port 443 (excluding
 private, Tailscale/CGNAT and reserved ranges), and the verified Kubernetes API
-ClusterIP port 443. Kubernetes Service DNAT / Calico evaluation can differ by
-cluster: test actual DNS, GitHub/GHCR and API calls in a **reviewed, manual**
-pilot Job while the CronJob remains suspended. If the API ClusterIP rule fails,
-stop; investigate with network-policy diagnostics and review any narrowly
-scoped node-IP:16443 exception separately. Do not open blanket private egress.
+ClusterIP `10.152.183.1:443`. There were **two independent blockers**:
+Python 3.13 strict X.509 rejected MicroK8s's CA for a missing key-usage
+extension; the releaser now relaxes only that check for its mounted Kubernetes
+CA (retaining chain and hostname validation). After fixing TLS, a diagnostic
+pod with **only** the ClusterIP egress rule again timed out on both named API
+GETs, while `192.168.68.6:16443` remained blocked. Calico evaluates the
+Service's translated node endpoint in this setup. The narrowly scoped
+node-IP:16443 exception is therefore required; all other private and
+Tailscale egress remains denied. If the node IP or Service endpoint changes,
+stop and review the policy; do not open blanket private egress.
 This policy does not provide hostname allowlisting for public HTTPS; anonymous
 GHCR availability and the trusted GitHub build workflow remain trust boundaries.
 
@@ -65,18 +70,18 @@ GHCR availability and the trusted GitHub build workflow remain trust boundaries.
    revision; retain these for rollback. Build/import only after reviewing source:
 
    ```sh
-    scripts/caos-build.sh portfolio/services/openwebui_tools_releaser Dockerfile openwebui-tools-releaser:pilot-1
+    scripts/caos-build.sh portfolio/services/openwebui_tools_releaser Dockerfile openwebui-tools-releaser:pilot-2
     ```
 
     On `caos`, inspect the newly imported tag in MicroK8s containerd and ensure
-    its digest equals the manifest's `sha256:9cfc14c2…` before creating the
+    its digest equals the manifest's `sha256:1ffcbe5d…` before creating the
     digest alias (adjust both when the reviewed source changes):
 
     ```sh
     /snap/microk8s/current/bin/ctr --address /var/snap/microk8s/common/run/containerd.sock -n k8s.io images ls
     /snap/microk8s/current/bin/ctr --address /var/snap/microk8s/common/run/containerd.sock -n k8s.io images tag \
-      docker.io/library/openwebui-tools-releaser:pilot-1 \
-      docker.io/library/openwebui-tools-releaser@sha256:9cfc14c271a3783e661ef55f7eb50eae6db4afe921be2e10a15d1595fccabe57
+      docker.io/library/openwebui-tools-releaser:pilot-2 \
+      docker.io/library/openwebui-tools-releaser@sha256:1ffcbe5d473516e057fda24e78b2883c89b972b46a89b15835ad318d6f5bac37
     ```
 
 3. With explicit approval, `kubectl apply -f portfolio/k8s/openwebui_tools/releaser.yaml`.
@@ -94,10 +99,10 @@ GHCR availability and the trusted GitHub build workflow remain trust boundaries.
 
 4. Only **after RBAC is active and negative permission checks return `no`**,
     confirming the expected new app digest and approving that rollout,
-   run one pilot Job using `kubectl -n default create job --from=cronjob/openwebui-tools-releaser openwebui-tools-releaser-pilot-1`.
+    run one pilot Job using `kubectl -n default create job --from=cronjob/openwebui-tools-releaser openwebui-tools-releaser-pilot-3`.
    A Job created manually **runs even while the CronJob is suspended**. Check
-   `kubectl -n default logs job/openwebui-tools-releaser-pilot-1` and
-   `kubectl -n default get job openwebui-tools-releaser-pilot-1`;
+    `kubectl -n default logs job/openwebui-tools-releaser-pilot-3` and
+    `kubectl -n default get job openwebui-tools-releaser-pilot-3`;
    inspect Deployment, pod health, Service type, and image/policy after it exits.
    Do not unsuspend if networking, anonymous access, policy, or readiness fails.
 5. Only after review of pilot results and separate approval for recurring

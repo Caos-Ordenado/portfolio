@@ -2,8 +2,10 @@ import copy
 import io
 import json
 import logging
+import ssl
 import sys
 import unittest
+import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
@@ -112,6 +114,18 @@ class FakeKube:
 
 
 class ReleaserTests(unittest.TestCase):
+    def test_cluster_ca_compatibility_keeps_tls_validation(self):
+        create_context = ssl.create_default_context
+        with patch.object(releaser.ssl, "create_default_context", side_effect=lambda cafile=None: create_context()):
+            external = releaser.Transport()
+            cluster = releaser.Transport("mounted-cluster-ca")
+        external_context = next(h._context for h in external.opener.handlers if isinstance(h, urllib.request.HTTPSHandler))
+        cluster_context = next(h._context for h in cluster.opener.handlers if isinstance(h, urllib.request.HTTPSHandler))
+        self.assertEqual(external_context.verify_flags, create_context().verify_flags)
+        self.assertFalse(cluster_context.verify_flags & ssl.VERIFY_X509_STRICT)
+        self.assertTrue(cluster_context.check_hostname)
+        self.assertEqual(cluster_context.verify_mode, ssl.CERT_REQUIRED)
+
     def test_pending_failed_skipped_or_newer_head_never_promotes_prior_run(self):
         for state, conclusion in [("queued", None), ("completed", "failure"),
                                   ("completed", "skipped")]:
