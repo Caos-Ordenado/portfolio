@@ -52,7 +52,8 @@ jobs:
 
           pr = api(f'repos/{repo}/pulls/{number}')
           if not eligible(pr):
-              raise SystemExit('Not an eligible open, non-draft same-repo bot PR to main')
+              print('Not an eligible source-only bot PR; no merge request')
+              raise SystemExit(0)
           sha = pr['head']['sha']
           branch = api(f'repos/{repo}/branches/main')
           # GITHUB_TOKEN with minimal permissions may not receive the
@@ -102,7 +103,8 @@ jobs:
               elif 'previous_filename' in item:
                   paths.append(item['previous_filename'])
               if any(not path.startswith(prefix) or len(path) == len(prefix) for path in paths):
-                  raise SystemExit('PR contains a non-source path (including rename origin)')
+                  print('Protected path or rename origin; no merge request')
+                  raise SystemExit(0)
 
           # Do not act on stale listings or a changed PR base/author/head.
           latest = api(f'repos/{repo}/pulls/{number}')
