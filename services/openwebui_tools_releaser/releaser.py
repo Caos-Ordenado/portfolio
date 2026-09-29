@@ -40,6 +40,11 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 class Transport:
     def __init__(self, ca_file=None):
         context = ssl.create_default_context(cafile=ca_file)
+        if ca_file:
+            # The current MicroK8s CA lacks a key-usage extension required by
+            # Python 3.13's strict mode. Only relax that check for the mounted
+            # cluster CA; still validate its chain and the server hostname.
+            context.verify_flags &= ~ssl.VERIFY_X509_STRICT
         self.opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context), NoRedirect()
         )

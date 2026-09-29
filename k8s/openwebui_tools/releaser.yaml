@@ -77,7 +77,7 @@ spec:
           containers:
             - name: releaser
               # Reviewed local image manifest, imported on caos and tagged by digest.
-              image: docker.io/library/openwebui-tools-releaser@sha256:9cfc14c271a3783e661ef55f7eb50eae6db4afe921be2e10a15d1595fccabe57
+              image: docker.io/library/openwebui-tools-releaser@sha256:1ffcbe5d473516e057fda24e78b2883c89b972b46a89b15835ad318d6f5bac37
               imagePullPolicy: Never
               securityContext:
                 readOnlyRootFilesystem: true
@@ -96,8 +96,8 @@ spec:
                   memory: 192Mi
 ---
 # Deny all inbound; outbound is limited to DNS, public IPv4 HTTPS, and the
-# read-only verified Kubernetes API ClusterIP (10.152.183.1 on MicroK8s).
-# Do not permit node/private/Tailscale destinations without a tested review.
+# MicroK8s translates API Service 10.152.183.1:443 to its single node's
+# 192.168.68.6:16443 before Calico checks egress; permit only that IP/port.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -149,3 +149,9 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+    - to:
+        - ipBlock:
+            cidr: 192.168.68.6/32
+      ports:
+        - protocol: TCP
+          port: 16443
