@@ -61,8 +61,15 @@ async def test_installation_token_is_repo_and_permission_scoped(monkeypatch):
         assert await GitHub(client).installation_token() == "installation-token"
 
 
-def mock_api(entries, *, fail_pulls=False, fail_auto_merge=False):
+def mock_api(entries, *, fail_pulls=False, fail_auto_merge=False, listed_path=PATH):
     calls = []
+    listed_pr = {
+        "state": "open", "draft": False, "number": 1, "node_id": "PR_kwTest",
+        "user": {"login": "home-lab-terminal-app[bot]"},
+        "head": {"ref": "agent/openwebui-tools/test", "sha": "f" * 40,
+                 "repo": {"id": 1, "full_name": REPO}},
+        "base": {"ref": "main", "sha": BASE, "repo": {"id": 1, "full_name": REPO}},
+    }
 
     def respond(request):
         assert request.url.host == "api.github.com"
@@ -83,6 +90,12 @@ def mock_api(entries, *, fail_pulls=False, fail_auto_merge=False):
             data = {"sha": NEW_COMMIT}
         elif path.endswith("/git/refs"):
             data = {}
+        elif path.endswith("/pulls") and request.method == "GET":
+            data = [listed_pr]
+        elif path.endswith("/pulls/1/files"):
+            data = [{"filename": listed_path, "status": "modified"}]
+        elif path.endswith("/pulls/1"):
+            data = {**listed_pr, "mergeable_state": "clean"}
         elif path.endswith("/pulls"):
             if fail_pulls:
                 return httpx.Response(500, json={"error": "private upstream content"})
@@ -174,6 +187,83 @@ async def test_failed_auto_merge_keeps_published_pr(monkeypatch):
     assert result["auto_merge_queued"] is False
     assert calls[-1][0:2] == ("POST", "/graphql")
     assert not any(method == "DELETE" for method, _, _ in calls)
+
+
+@pytest.mark.asyncio
+async def test_ready_bot_pr_requeues_only_allowlisted_source(monkeypatch):
+    for path, expected in [(PATH, True), ("k8s/code-agent/deployment.yaml", False)]:
+        transport, calls = mock_api([], listed_path=path)
+        async with httpx.AsyncClient(transport=transport) as client:
+            github = GitHub(client)
+
+            async def token():
+                return "test-token"
+
+            monkeypatch.setattr(github, "installation_token", token)
+            await github.retry_ready_auto_merges()
+        assert any(method == "POST" and url == "/graphql" for method, url, _ in calls) is expected
+
+
+@pytest.mark.asyncio
+async def test_retry_finds_bot_pr_after_unrelated_full_page(monkeypatch):
+    bot = {
+        "state": "open", "draft": False, "number": 2, "node_id": "PR_kwTest",
+        "user": {"login": "home-lab-terminal-app[bot]"},
+        "head": {"ref": "agent/openwebui-tools/allowed", "sha": "f" * 40,
+                 "repo": {"id": 1, "full_name": REPO}},
+        "base": {"ref": "main", "sha": BASE, "repo": {"id": 1, "full_name": REPO}},
+    }
+    called = []
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda req: httpx.Response(200, json={}))) as client:
+        github = GitHub(client)
+
+        async def token():
+            return "test-token"
+
+        async def listing(path, _token):
+            if path.endswith("&page=1"):
+                return [{"state": "open", "user": {"login": "other"}} for _ in range(100)]
+            if path.endswith("&page=2"):
+                return [bot]
+            return [{"filename": PATH, "status": "modified"}]
+
+        async def detail(method, path, _token, payload=None):
+            assert method == "GET" and path.endswith("/pulls/2")
+            return {**bot, "mergeable_state": "clean"}
+
+        async def queue(_token, node_id):
+            called.append(node_id)
+            return True
+
+        monkeypatch.setattr(github, "installation_token", token)
+        monkeypatch.setattr(github, "request_list", listing)
+        monkeypatch.setattr(github, "request", detail)
+        monkeypatch.setattr(github, "request_auto_merge", queue)
+        await github.retry_ready_auto_merges()
+    assert called == ["PR_kwTest"]
+
+
+@pytest.mark.asyncio
+async def test_retry_never_uses_incomplete_pr_pages(monkeypatch):
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda req: httpx.Response(200, json={}))) as client:
+        github = GitHub(client)
+
+        async def token():
+            return "test-token"
+
+        async def listing(path, _token):
+            if path.endswith("&page=1"):
+                return [{"state": "open", "user": {"login": "other"}} for _ in range(100)]
+            raise UpstreamError("page unavailable")
+
+        async def unexpected(*_args):
+            raise AssertionError("incomplete page must not request auto-merge")
+
+        monkeypatch.setattr(github, "installation_token", token)
+        monkeypatch.setattr(github, "request_list", listing)
+        monkeypatch.setattr(github, "request_auto_merge", unexpected)
+        with pytest.raises(UpstreamError):
+            await github.retry_ready_auto_merges()
 
 
 @pytest.mark.asyncio
