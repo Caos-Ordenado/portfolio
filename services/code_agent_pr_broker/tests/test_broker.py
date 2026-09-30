@@ -61,7 +61,7 @@ async def test_installation_token_is_repo_and_permission_scoped(monkeypatch):
         assert await GitHub(client).installation_token() == "installation-token"
 
 
-def mock_api(entries, *, fail_pulls=False):
+def mock_api(entries, *, fail_pulls=False, fail_auto_merge=False):
     calls = []
 
     def respond(request):
@@ -86,7 +86,12 @@ def mock_api(entries, *, fail_pulls=False):
         elif path.endswith("/pulls"):
             if fail_pulls:
                 return httpx.Response(500, json={"error": "private upstream content"})
-            data = {"html_url": f"https://github.com/{REPO}/pull/1", "number": 1}
+            data = {"html_url": f"https://github.com/{REPO}/pull/1", "number": 1, "node_id": "PR_kwTest"}
+        elif path == "/graphql":
+            if fail_auto_merge:
+                return httpx.Response(403, json={"error": "private upstream content"})
+            assert json.loads(request.content)["variables"] == {"id": "PR_kwTest"}
+            data = {"data": {"enablePullRequestAutoMerge": {"pullRequest": {"autoMergeRequest": {"enabledAt": "2026-09-30T00:00:00Z"}}}}}
         elif "/git/refs/heads/agent/" in path and request.method == "DELETE":
             data = {}
         else:
@@ -109,8 +114,9 @@ async def test_creates_pr_only_for_fixed_repo_preserving_mode(monkeypatch):
         monkeypatch.setattr(github, "installation_token", token)
         result = await github.create_proposal(proposal())
     assert result["number"] == 1
+    assert result["auto_merge_queued"] is True
     assert result["branch"].startswith("agent/openwebui-tools/")
-    assert all(path.startswith(ROOT + "/") for _, path, _ in calls)
+    assert all(path.startswith(ROOT + "/") or path == "/graphql" for _, path, _ in calls)
     tree_payload = next(payload for method, path, payload in calls if method == "POST" and path.endswith("/git/trees"))
     assert tree_payload == {"base_tree": TREE, "tree": [{"path": PATH, "mode": "100755", "type": "blob", "sha": BLOB}]}
     assert next(payload for method, path, payload in calls if path.endswith("/pulls")) == {
@@ -151,6 +157,23 @@ async def test_failed_pr_cleans_branch_without_upstream_payload(monkeypatch):
             await github.create_proposal(proposal())
     assert "private upstream content" not in str(exc.value)
     assert calls[-1][0] == "DELETE"
+
+
+@pytest.mark.asyncio
+async def test_failed_auto_merge_keeps_published_pr(monkeypatch):
+    transport, calls = mock_api([], fail_auto_merge=True)
+    async with httpx.AsyncClient(transport=transport) as client:
+        github = GitHub(client)
+
+        async def token():
+            return "test-token"
+
+        monkeypatch.setattr(github, "installation_token", token)
+        result = await github.create_proposal(proposal())
+    assert result["number"] == 1
+    assert result["auto_merge_queued"] is False
+    assert calls[-1][0:2] == ("POST", "/graphql")
+    assert not any(method == "DELETE" for method, _, _ in calls)
 
 
 @pytest.mark.asyncio
