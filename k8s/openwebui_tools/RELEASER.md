@@ -119,8 +119,9 @@ GHCR availability and the trusted GitHub build workflow remain trust boundaries.
    `sha256:db60eefdbd12c59f1c5621d5ea3b455377d942ddd6877c7a4044669539f9618a`.
    The Service remained ClusterIP and a real `/crawl` returned one result via
    OpenWebUI. The Deployment was ready 1/1, with `IfNotPresent` and the new
-   attempted-run marker. Subsequent scheduled Jobs should log
-   `run_already_attempted` while that run remains current.
+   attempted-run marker. The 13:10 UTC scheduled Job
+   `openwebui-tools-releaser-29846230` logged `run_already_attempted` and left
+   Deployment generation `22` unchanged, confirming it did not restart tools.
 
 ## Recovery and drift
 
