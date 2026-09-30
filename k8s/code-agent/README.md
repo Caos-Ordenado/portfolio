@@ -30,6 +30,17 @@ The isolated runtime was tested on home MicroK8s before attaching it to Open Web
 5. In the existing **public** Open WebUI, administrator only: Admin Settings → Integrations → Open Terminal → add **system-level** connection using the service URL above and the key from the temporary file. Leave disabled until access-grants are explicitly restricted to the approved admin account/group and verified in the actual version (UI naming may differ). Grant no default/all-users access, no user-level connection, no sharing the key with chat users, and no Traefik routing. Enable only for that admin; sign in as a non-admin approved account and a pending account to prove neither can use, enumerate, or invoke the terminal. If the current Open WebUI lacks enforceable per-connection restrictions, remove/disable the connection and stop the pilot.
 6. Clone the **public** portfolio repository over HTTPS without tokens, deploy keys, credential helpers or direct push rights. The isolated PR broker holds the repo-scoped GitHub App credential; the model submits allowlisted source contents to it instead of using `git push`. The model may immediately publish a **public PR** containing those files without a human review first; checks and review gate merge and deployment. Do not submit secrets or private data, or paste bot credentials into terminal sessions, chats or the PVC. Test a benign command in the admin chat and verify ordinary chat behavior is unchanged.
 
+The agent instructions are tracked at `k8s/code-agent/terminal-AGENTS.md` and
+loaded by Open Terminal from its home directory at each turn. From the
+`portfolio/` root, after reviewing changes to those instructions, sync them to
+the persistent terminal workspace (no secrets in this file):
+
+```sh
+POD=$(kubectl -n code-agent get pod -l app=open-terminal -o jsonpath='{.items[0].metadata.name}')
+kubectl cp k8s/code-agent/terminal-AGENTS.md "code-agent/$POD:/home/user/AGENTS.md"
+kubectl -n code-agent exec deployment/open-terminal -- ls -l /home/user/AGENTS.md
+```
+
 ## Rollback / recovery
 
 Immediately disable and remove the system-level Open Terminal connection and revoke its grants in Open WebUI; verify non-admin and admin invocations no longer work. `kubectl -n code-agent scale deployment/open-terminal --replicas=0` stops execution while preserving the workspace. Delete the Secret to invalidate the key (`kubectl -n code-agent delete secret open-terminal-api-key`) and rotate any exposed credentials. If retiring the pilot, `kubectl delete -k k8s/code-agent` removes the namespace and **may delete the PVC and its data**; take a secure out-of-git backup first if data retention is required, inspect PV reclaim policy, and confirm deletion. Removing the manifests alone does **not** remove Open WebUI's persistent admin connection. If only a manifest update fails, restore the prior version of this overlay and reapply it after reviewing PVC/Secret effects; never roll back by opening an ingress.
