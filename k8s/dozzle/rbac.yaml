@@ -12,6 +12,10 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log", "namespaces"]
     verbs: ["get", "list", "watch"]
+  # Dozzle enumerates nodes at startup in Kubernetes mode.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
