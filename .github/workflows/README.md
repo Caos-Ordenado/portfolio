@@ -22,7 +22,7 @@ cluster deployment job exists in this workflow. The stable workflow name is
 `openwebui-tools trusted deploy` and the publish job ID is `build` for the
 separate in-cluster controller's GitHub run polling.
 
-### Optional source-only auto-merge request (off by default)
+### Source-only auto-merge request (explicitly activated)
 
 `openwebui-tools-auto-merge.yml` runs only on GitHub-hosted
 `pull_request_target`. It never checks out or executes PR code, and never
@@ -33,6 +33,12 @@ outside `services/openwebui_tools/src/` (including a rename **from** outside)
 is ineligible. The full paginated file list is checked; 3000 files are rejected
 because GitHub may truncate at that limit. The live head SHA is matched at
 merge request time. No GH credentials belong in chat or the repository.
+GitHub itself rejects `--auto` if repository auto-merge is disabled; the
+minimal Actions token need not see that repository setting through REST.
+Ineligible author/path PRs end without requesting a merge; API errors and
+incomplete file listings fail closed. `OPENWEBUI_TOOLS_BOT_LOGIN` is set to
+`home-lab-terminal-app[bot]` and `OPENWEBUI_TOOLS_AUTO_MERGE_READY=true` on the
+pilot repository; review and CI checks still gate every merge.
 
 Activation requires a maintainer to enable GitHub auto-merge and set both
 repository variables `OPENWEBUI_TOOLS_BOT_LOGIN` to the **exact** dedicated bot
