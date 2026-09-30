@@ -67,3 +67,17 @@ The committed-only CI context must explicitly archive
 `services/openwebui_tools/requirements.lock` alongside the Dockerfile and source;
 otherwise Docker's `COPY` fails. The CI workflow archive and its source-only deploy
 gate are owned separately from this service; coordinate their update before release.
+
+## Home-server releases
+
+For source-only changes to `src/`, the App opens a PR, GitHub requires the `checks`
+job and an owner review, and hosted Actions publishes a public GHCR image with a
+run-bound digest. The in-cluster `openwebui-tools-releaser` CronJob (every 10
+minutes) verifies the current `main` build, its digest status, and GHCR before
+updating this **ClusterIP-only** Deployment. The reviewed one-shot and recurring
+rollouts, health check, and manual rollback to the previous local image passed.
+See [`k8s/openwebui_tools/RELEASER.md`](../../k8s/openwebui_tools/RELEASER.md)
+for current image, RBAC, observability, and rollback commands. The checked-in
+legacy Deployment image is not the live controller-managed digest: suspend the
+CronJob and reconcile the desired image/pull policy before running `./deploy.sh`
+or `kubectl apply -k k8s/openwebui_tools`, since either may overwrite it.

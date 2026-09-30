@@ -111,7 +111,16 @@ GHCR availability and the trusted GitHub build workflow remain trust boundaries.
    have no retry, and allow 1200 seconds for bounded API calls plus two
    300-second readiness waits. A newer mixed-path push has no eligible build:
    the first scheduled Job after activation should log `no_eligible_build` and
-   leave the Deployment unchanged. Verify this before the next source-only PR.
+   leave the Deployment unchanged. This was verified by the 13:00 UTC scheduled
+   Job on 2026-09-30. A later App-authored, owner-reviewed source-only PR #31
+   merged as `f5462283466a9ef8c427d356912f6a4bc87fe177`: the hosted `gate`
+   and `build` succeeded (run `36718206313`) and the next scheduled Job
+   `openwebui-tools-releaser-29846220` deployed its matching GHCR digest
+   `sha256:db60eefdbd12c59f1c5621d5ea3b455377d942ddd6877c7a4044669539f9618a`.
+   The Service remained ClusterIP and a real `/crawl` returned one result via
+   OpenWebUI. The Deployment was ready 1/1, with `IfNotPresent` and the new
+   attempted-run marker. Subsequent scheduled Jobs should log
+   `run_already_attempted` while that run remains current.
 
 ## Recovery and drift
 
