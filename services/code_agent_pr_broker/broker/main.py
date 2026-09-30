@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ API = "https://api.github.com"
 REPO = "Caos-Ordenado/portfolio"
 PREFIX = "services/openwebui_tools/src/"
 BRANCH_PREFIX = "agent/openwebui-tools/"
+BOT_LOGIN = "home-lab-terminal-app[bot]"
 MAX_BODY = 256 * 1024
 MAX_BYTES = 64 * 1024
 SHA = re.compile(r"[a-fA-F0-9]{40}")
@@ -114,6 +116,20 @@ class GitHub:
             # Never include response bodies, request objects, or headers (contain credentials).
             raise UpstreamError("GitHub request failed") from None
 
+    async def request_list(self, path: str, token: str) -> list[dict[str, Any]]:
+        try:
+            response = await self.client.get(
+                API + path,
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
+            )
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
+                raise UpstreamError("invalid GitHub list")
+            return data
+        except (httpx.HTTPError, ValueError):
+            raise UpstreamError("GitHub list request failed") from None
+
     async def installation_token(self) -> str:
         installation = os.environ.get("GITHUB_INSTALLATION_ID", "")
         if not installation.isdecimal():
@@ -124,6 +140,86 @@ class GitHub:
         if not isinstance(token, str) or not token:
             raise UpstreamError("invalid installation token response")
         return token
+
+    async def request_auto_merge(self, token: str, node_id: str) -> bool:
+        if not isinstance(node_id, str) or not node_id:
+            return False
+        try:
+            result = await self.request("POST", "/graphql", token, {
+                "query": "mutation($id: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: SQUASH}) { pullRequest { autoMergeRequest { enabledAt } } } }",
+                "variables": {"id": node_id},
+            })
+            return bool(
+                not result.get("errors")
+                and (result.get("data") or {}).get("enablePullRequestAutoMerge", {})
+                .get("pullRequest", {}).get("autoMergeRequest", {}).get("enabledAt")
+            )
+        except (UpstreamError, TypeError, AttributeError):
+            logger.warning("auto_merge_not_queued")
+            return False
+
+    async def retry_ready_auto_merges(self) -> None:
+        """Re-request auto-merge once GitHub reports all protected gates clean."""
+        token = await self.installation_token()
+        root = f"/repos/{REPO}"
+        prs: list[dict[str, Any]] = []
+        for page in range(1, 31):
+            batch = await self.request_list(
+                f"{root}/pulls?state=open&base=main&per_page=100&page={page}", token
+            )
+            if len(batch) > 100:
+                raise UpstreamError("invalid PR page")
+            prs.extend(batch)
+            if len(prs) >= 3000:  # GitHub caps PR file listings at 3000 too.
+                logger.warning("auto_merge_pr_window_full")
+                return
+            if len(batch) < 100:
+                break
+        # Finish pagination before evaluating any candidate. A failed page
+        # must not turn a partial result into an authorization decision.
+        for pr in prs:
+            head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
+            base = pr.get("base") if isinstance(pr.get("base"), dict) else {}
+            head_repo = head.get("repo") if isinstance(head.get("repo"), dict) else {}
+            base_repo = base.get("repo") if isinstance(base.get("repo"), dict) else {}
+            number = pr.get("number")
+            if not (
+                pr.get("state") == "open" and not pr.get("draft")
+                and isinstance(pr.get("user"), dict) and pr["user"].get("login") == BOT_LOGIN
+                and type(number) is int and number > 0
+                and isinstance(head.get("ref"), str) and head["ref"].startswith(BRANCH_PREFIX)
+                and base.get("ref") == "main"
+                and head_repo.get("full_name") == REPO == base_repo.get("full_name")
+                and head_repo.get("id") == base_repo.get("id")
+            ):
+                continue
+            files = await self.request_list(f"{root}/pulls/{number}/files?per_page=100", token)
+            if not files or len(files) >= 100:
+                continue
+            if any(
+                not isinstance(path, str) or not path.startswith(PREFIX) or len(path) == len(PREFIX)
+                for item in files
+                for path in ([item.get("filename")] + ([item["previous_filename"]] if "previous_filename" in item else []))
+            ):
+                continue
+            latest = await self.request("GET", f"{root}/pulls/{number}", token)
+            latest_head = latest.get("head") if isinstance(latest.get("head"), dict) else {}
+            latest_base = latest.get("base") if isinstance(latest.get("base"), dict) else {}
+            latest_head_repo = latest_head.get("repo") if isinstance(latest_head.get("repo"), dict) else {}
+            latest_base_repo = latest_base.get("repo") if isinstance(latest_base.get("repo"), dict) else {}
+            if not (
+                latest.get("state") == "open" and latest.get("mergeable_state") == "clean"
+                and isinstance(latest.get("user"), dict) and latest["user"].get("login") == BOT_LOGIN
+                and latest_head.get("sha") == head.get("sha")
+                and latest_base.get("sha") == base.get("sha")
+                and latest_head.get("ref") == head.get("ref")
+                and latest_base.get("ref") == "main"
+                and latest_head_repo.get("full_name") == REPO == latest_base_repo.get("full_name")
+                and latest_head_repo.get("id") == latest_base_repo.get("id")
+            ):
+                continue
+            if await self.request_auto_merge(token, latest.get("node_id")):
+                logger.info("auto_merge_ready_pr=%s", number)
 
     async def create_proposal(self, proposal: Proposal) -> dict[str, Any]:
         token = await self.installation_token()
@@ -190,25 +286,36 @@ class GitHub:
         # The App token (unlike GITHUB_TOKEN in pull_request_target) may request
         # auto-merge. GitHub still requires protected-branch checks and review.
         # An auto-merge error must never delete an already published PR/branch.
-        queued = False
-        node_id = pr.get("node_id")
-        if isinstance(node_id, str) and node_id:
-            try:
-                result = await self.request("POST", "/graphql", token, {
-                    "query": "mutation($id: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: SQUASH}) { pullRequest { autoMergeRequest { enabledAt } } } }",
-                    "variables": {"id": node_id},
-                })
-                if result.get("errors") or not (result.get("data") or {}).get("enablePullRequestAutoMerge", {}).get("pullRequest", {}).get("autoMergeRequest", {}).get("enabledAt"):
-                    raise UpstreamError("auto-merge request failed")
-                queued = True
-            except (UpstreamError, TypeError, AttributeError):
-                logger.warning("auto_merge_not_queued")
-        else:
+        queued = await self.request_auto_merge(token, pr.get("node_id"))
+        if not queued:
             logger.warning("auto_merge_not_queued")
         return {"url": url, "number": number, "branch": branch, "auto_merge_queued": queued}
 
 
-app = FastAPI(title="Code agent PR broker")
+async def poll_auto_merges() -> None:
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(20.0), follow_redirects=False) as client:
+                await GitHub(client).retry_ready_auto_merges()
+        except (UpstreamError, RuntimeError, OSError, jwt.PyJWTError, asyncio.TimeoutError, ValueError, TypeError):
+            logger.warning("auto_merge_poller_failed")
+        await asyncio.sleep(60)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    task = asyncio.create_task(poll_auto_merges())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+app = FastAPI(title="Code agent PR broker", lifespan=lifespan)
 
 
 @app.middleware("http")

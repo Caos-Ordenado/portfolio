@@ -32,7 +32,7 @@ spec:
       containers:
         - name: pr-broker
           # Reviewed local build from the locked broker image, imported on caos.
-          image: docker.io/library/code-agent-pr-broker@sha256:bbdb3b4556679633fee9a20de9de1a2fc9626976c5ccf8e2a9d5c70aabe4446b
+          image: docker.io/library/code-agent-pr-broker@sha256:44a23d8e54d53d2d0284ee7ad6f8c0c15b3588ff8e846075098fa473cf569f0e
           imagePullPolicy: Never
           securityContext:
             allowPrivilegeEscalation: false
