@@ -74,7 +74,9 @@ with `GITHUB_TOKEN` would not reliably trigger the downstream push workflow.
     deploy. No self-hosted runner or GitHub kubeconfig is needed. Home MicroK8s
     runs `RBAC,Node`; the releaser identity was verified to be denied Secrets,
     pod exec, lists and other Deployments. Recheck after RBAC changes. The
-    CronJob remains suspended until recurring rollout is separately approved.
+    The one-shot rollout and manual rollback drill passed; the reviewed
+    `k8s/openwebui_tools/releaser.yaml` enables recurrence after separate owner
+    approval. Check its effective RBAC and every scheduled Job.
 
 ## Rollout and recovery
 

@@ -1,8 +1,9 @@
-# Open WebUI tools releaser: operator-only pilot
+# Open WebUI tools releaser (home MicroK8s)
 
 `releaser.yaml` is **not** in `portfolio/k8s/kustomization.yaml` or the local
 `kustomization.yaml`. Apply this file explicitly only after review. The CronJob
-starts suspended. It has no listener, Service, Ingress, or Traefik route. Its
+was staged suspended for the pilot; its reviewed manifest now enables recurrence
+every 10 minutes. It has no listener, Service, Ingress, or Traefik route. Its
  only in-cluster access is a projected service-account token for named Deployment
  GET/PATCH and named Service GET in `default`. Deployment PATCH can change more
  than the image if the controller code is compromised; treat this reviewed,
@@ -15,9 +16,10 @@ remains cluster-internal; this does not expose it over Tailscale or publicly.
 uses `--authorization-mode=RBAC,Node`, after previously running `AlwaysAllow`.
 The named ServiceAccount returns `yes` only for its named Deployment GET/PATCH
 and Service GET and `no` for Secrets, other Deployments, lists and pod exec.
-Recheck these effective permissions and workload health before any Job, after
-every RBAC/addon change. The CronJob remains suspended until an approved pilot
-build, image and rollback are verified. Host recovery is documented in the
+Recheck these effective permissions and workload health after every RBAC/addon
+change. The approved pilot build, image rollout and manual rollback drill passed:
+the Deployment returned to the GHCR digest with `IfNotPresent`, ready 1/1 and
+`/health` working. Host recovery is documented in the
 parent repository's `scripts/caos-host.md` (`sudo microk8s disable rbac`).
 
 ## Preflight (no apply)
@@ -84,9 +86,11 @@ GHCR availability and the trusted GitHub build workflow remain trust boundaries.
       docker.io/library/openwebui-tools-releaser@sha256:1ffcbe5d473516e057fda24e78b2883c89b972b46a89b15835ad318d6f5bac37
     ```
 
-3. With explicit approval, `kubectl apply -f portfolio/k8s/openwebui_tools/releaser.yaml`.
-   Confirm `kubectl -n default get cronjob openwebui-tools-releaser` reports
-   SUSPEND=true and that the local image exists on the target node. Check RBAC:
+3. The initial staged installation was applied with `suspend=true` and kept
+   inactive until the pilot and rollback passed. The **approved activation** uses
+   this reviewed `suspend=false` manifest: `kubectl apply -f portfolio/k8s/openwebui_tools/releaser.yaml`.
+   Confirm the CronJob reports SUSPEND=false and its digest-pinned image exists
+   on the target node. Check RBAC:
 
    ```sh
    kubectl auth can-i get deployments.apps/openwebui-tools -n default --as=system:serviceaccount:default:openwebui-tools-releaser
@@ -97,20 +101,17 @@ GHCR availability and the trusted GitHub build workflow remain trust boundaries.
    kubectl auth can-i get secrets -n default --as=system:serviceaccount:default:openwebui-tools-releaser # no
    ```
 
-4. Only **after RBAC is active and negative permission checks return `no`**,
-    confirming the expected new app digest and approving that rollout,
-    run one pilot Job using `kubectl -n default create job --from=cronjob/openwebui-tools-releaser openwebui-tools-releaser-pilot-3`.
-   A Job created manually **runs even while the CronJob is suspended**. Check
-    `kubectl -n default logs job/openwebui-tools-releaser-pilot-3` and
-    `kubectl -n default get job openwebui-tools-releaser-pilot-3`;
-   inspect Deployment, pod health, Service type, and image/policy after it exits.
-   Do not unsuspend if networking, anonymous access, policy, or readiness fails.
-5. Only after review of pilot results and separate approval for recurring
-   rollout, set `spec.suspend=false` by an explicitly reviewed manifest change
-   or operator patch. **Do not reapply this suspended file to an enabled CronJob
-   without planning for the resulting pause.** The job runs every 10 minutes,
-   forbids concurrent scheduled runs, has no retry, and allows 1200 seconds for
-   up to 20 bounded GitHub job requests plus two 300-second readiness waits.
+4. The one-shot `openwebui-tools-releaser-pilot-3` completed with `rollout_ready`;
+   its image digest, `IfNotPresent`, `ClusterIP`, readiness and `/health` were
+   verified. A controlled rollback to the previous local image + `Never`, then
+   restoration of the GHCR digest + `IfNotPresent`, passed two 1/1 rollouts.
+   The attempted-run marker was retained. A Job created manually from a
+   suspended CronJob **still runs**; use it only with explicit approval.
+5. Recurring jobs run every 10 minutes, forbid concurrent scheduled runs,
+   have no retry, and allow 1200 seconds for bounded API calls plus two
+   300-second readiness waits. A newer mixed-path push has no eligible build:
+   the first scheduled Job after activation should log `no_eligible_build` and
+   leave the Deployment unchanged. Verify this before the next source-only PR.
 
 ## Recovery and drift
 
@@ -132,7 +133,7 @@ existing kustomization or the legacy deploy script can also reset the image or
 policy: treat that as a competing writer, suspend the controller, reconcile the
 intended source of truth, then consider resuming only after review.
 
-Post-change: check CronJob SUSPEND, Job status and logs (no tokens or registry
+Post-change: check CronJob SUSPEND matches the reviewed desired state, Job status and logs (no tokens or registry
 responses), Deployment image/policy and readiness, pods/events for pull failures,
 Service `ClusterIP`, RBAC denials, and NetworkPolicy DNS/API/public HTTPS
 reachability. Record the deployed digest and next scheduled result; if the Job
