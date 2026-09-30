@@ -46,28 +46,27 @@ login (for a GitHub App, typically `app-slug[bot]`) and
 `OPENWEBUI_TOOLS_AUTO_MERGE_READY=true` only after verifying the following:
 
 - Protect `main` with required `checks` status from the PR workflow and
-  required approving reviews; the workflow checks these classic branch
-  protection settings and fails closed if it cannot read them. Ruleset-only
-  protection is not accepted by this pilot. Keep direct pushes, force pushes
+  required approving reviews; the owner must verify these rules separately
+  because the minimal Actions token cannot read `branchProtectionRule` through
+  GraphQL. GitHub enforces those gates when processing `--auto`, and this token
+  cannot approve or bypass them. Keep direct pushes, force pushes
   and bypass permissions restricted; configure CODEOWNERS for protected
   `.github/workflows/**`, `services/openwebui_tools/Dockerfile`, deployment
   manifests and shared build inputs and require code-owner review via branch
   rules. A future workflow/Dockerfile change can affect later trusted builds.
 - Have a maintainer create and review the first PRs manually, confirm the
   required check name is exactly `checks` in protection settings, that review
-  and CODEOWNERS rules work, and that the default `GITHUB_TOKEN` can read the
-  branch-protection rule and request auto-merge. If it cannot read the rule,
-  leave this workflow off; do **not** add a broad admin token to work around
-  it. The token only requests auto-merge; GitHub still enforces reviews and
+  and CODEOWNERS rules work. The limited token requests auto-merge without
+  reading branch-protection details; do **not** add an admin token to work
+  around that GitHub API restriction. GitHub still enforces reviews and
   checks. If requiring code-owner review also blocks bot source-only PRs,
   leave these PRs for human review/merge until the rules are safely resolved;
   never weaken workflow/Dockerfile owner protection for this pilot.
 - Use a dedicated GitHub App (or other non-`GITHUB_TOKEN` bot identity) to
   author the PR: Actions created with the default `GITHUB_TOKEN` do not
-  normally trigger `pull_request_target` workflows. Store App credentials in
-  operator-controlled GitHub settings, not in chat, code or this workflow.
-  Repository access here is currently READ, so none of these settings or
-  protections have been activated by this change.
+  normally trigger `pull_request_target` workflows. The installed
+  `home-lab-terminal-app` key is mounted only in the private PR broker, not
+  in chat, code, this workflow or the terminal pod.
 
 ## Operator activation (manual)
 
