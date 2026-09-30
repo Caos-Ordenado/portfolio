@@ -50,7 +50,8 @@ metadata:
 spec:
   schedule: '*/10 * * * *'
   concurrencyPolicy: Forbid
-  suspend: true
+  # Recurring rollout approved after a successful one-shot and rollback drill.
+  suspend: false
   startingDeadlineSeconds: 120
   successfulJobsHistoryLimit: 2
   failedJobsHistoryLimit: 2
