@@ -180,13 +180,32 @@ class GitHub:
             number = pr.get("number")
             if not isinstance(url, str) or not url.startswith(f"https://github.com/{REPO}/pull/") or type(number) is not int:
                 raise UpstreamError("invalid pull request response")
-            return {"url": url, "number": number, "branch": branch}
         except UpstreamError:
             try:
                 await self.request("DELETE", f"{root}/git/refs/heads/{branch}", token)
             except UpstreamError:
                 logger.warning("orphan_branch_cleanup_failed")
             raise
+
+        # The App token (unlike GITHUB_TOKEN in pull_request_target) may request
+        # auto-merge. GitHub still requires protected-branch checks and review.
+        # An auto-merge error must never delete an already published PR/branch.
+        queued = False
+        node_id = pr.get("node_id")
+        if isinstance(node_id, str) and node_id:
+            try:
+                result = await self.request("POST", "/graphql", token, {
+                    "query": "mutation($id: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: SQUASH}) { pullRequest { autoMergeRequest { enabledAt } } } }",
+                    "variables": {"id": node_id},
+                })
+                if result.get("errors") or not (result.get("data") or {}).get("enablePullRequestAutoMerge", {}).get("pullRequest", {}).get("autoMergeRequest", {}).get("enabledAt"):
+                    raise UpstreamError("auto-merge request failed")
+                queued = True
+            except (UpstreamError, TypeError, AttributeError):
+                logger.warning("auto_merge_not_queued")
+        else:
+            logger.warning("auto_merge_not_queued")
+        return {"url": url, "number": number, "branch": branch, "auto_merge_queued": queued}
 
 
 app = FastAPI(title="Code agent PR broker")

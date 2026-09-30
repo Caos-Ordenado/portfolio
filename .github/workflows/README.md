@@ -1,6 +1,6 @@
 # openwebui-tools CI / GHCR build pilot
 
-This is a **scaffold, not an activated deployment**. PR checks run on GitHub-hosted
+PR checks run on GitHub-hosted
 `ubuntu-latest` without secrets or cluster access. They compile service/shared
 Python sources, syntax-check the existing deploy helper without running it,
 and build the real service Dockerfile using only the same tracked build inputs
@@ -22,53 +22,18 @@ cluster deployment job exists in this workflow. The stable workflow name is
 `openwebui-tools trusted deploy` and the publish job ID is `build` for the
 separate in-cluster controller's GitHub run polling.
 
-### Source-only auto-merge request (explicitly activated)
+### Source-only auto-merge request
 
-`openwebui-tools-auto-merge.yml` runs only on GitHub-hosted
-`pull_request_target`. It never checks out or executes PR code, and never
-approves a PR. It requests `gh pr merge --auto --squash` for a non-draft,
-same-repository PR into `main` opened by the dedicated bot login in the repo
-variable `OPENWEBUI_TOOLS_BOT_LOGIN`. A fork, missing variable, or any path
-outside `services/openwebui_tools/src/` (including a rename **from** outside)
-is ineligible. The full paginated file list is checked; 3000 files are rejected
-because GitHub may truncate at that limit. The live head SHA is matched at
-merge request time. No GH credentials belong in chat or the repository.
-GitHub itself rejects `--auto` if repository auto-merge is disabled; the
-minimal Actions token need not see that repository setting through REST.
-Ineligible author/path PRs end without requesting a merge; API errors and
-incomplete file listings fail closed. `OPENWEBUI_TOOLS_BOT_LOGIN` is set to
-`home-lab-terminal-app[bot]` and `OPENWEBUI_TOOLS_AUTO_MERGE_READY=true` on the
-pilot repository; review and CI checks still gate every merge.
+The private PR broker (`services/code_agent_pr_broker/`) uses the scoped
+`home-lab-terminal-app` installation token to create source-only PRs and request
+squash auto-merge. GitHub's protected `main` still requires the `checks` job and
+an independent owner review before it merges. The App key stays in the broker,
+not in chat, the terminal, or GitHub Actions. The previous
+`pull_request_target` request workflow was removed: GitHub denies its minimal
+`GITHUB_TOKEN` the `enablePullRequestAutoMerge` mutation, and a merge initiated
+with `GITHUB_TOKEN` would not reliably trigger the downstream push workflow.
 
-Activation requires a maintainer to enable GitHub auto-merge and set both
-repository variables `OPENWEBUI_TOOLS_BOT_LOGIN` to the **exact** dedicated bot
-login (for a GitHub App, typically `app-slug[bot]`) and
-`OPENWEBUI_TOOLS_AUTO_MERGE_READY=true` only after verifying the following:
-
-- Protect `main` with required `checks` status from the PR workflow and
-  required approving reviews; the owner must verify these rules separately
-  because the minimal Actions token cannot read `branchProtectionRule` through
-  GraphQL. GitHub enforces those gates when processing `--auto`, and this token
-  cannot approve or bypass them. Keep direct pushes, force pushes
-  and bypass permissions restricted; configure CODEOWNERS for protected
-  `.github/workflows/**`, `services/openwebui_tools/Dockerfile`, deployment
-  manifests and shared build inputs and require code-owner review via branch
-  rules. A future workflow/Dockerfile change can affect later trusted builds.
-- Have a maintainer create and review the first PRs manually, confirm the
-  required check name is exactly `checks` in protection settings, that review
-  and CODEOWNERS rules work. The limited token requests auto-merge without
-  reading branch-protection details; do **not** add an admin token to work
-  around that GitHub API restriction. GitHub still enforces reviews and
-  checks. If requiring code-owner review also blocks bot source-only PRs,
-  leave these PRs for human review/merge until the rules are safely resolved;
-  never weaken workflow/Dockerfile owner protection for this pilot.
-- Use a dedicated GitHub App (or other non-`GITHUB_TOKEN` bot identity) to
-  author the PR: Actions created with the default `GITHUB_TOKEN` do not
-  normally trigger `pull_request_target` workflows. The installed
-  `home-lab-terminal-app` key is mounted only in the private PR broker, not
-  in chat, code, this workflow or the terminal pod.
-
-## Operator activation (manual)
+## Trust and release configuration
 
 1. Protect `main`: require PR review, the `checks` PR status, CODEOWNERS approval
    for `.github/workflows/**`, the Dockerfile, lockfile, shared build inputs and
@@ -106,11 +71,10 @@ login (for a GitHub App, typically `app-slug[bot]`) and
    Kubernetes permissions; keep credentials in cluster Secrets, not ConfigMaps,
     GitHub secrets, or repo files. Review concurrency and safe rollback of both
     image and pull policy. Without that controller, publishing does **not**
-    deploy. No self-hosted runner or GitHub kubeconfig is needed.
-    Home MicroK8s now runs `RBAC,Node` (previously `AlwaysAllow`). The releaser
-    identity was verified to be denied Secrets, pod exec, lists and other
-    Deployments; recheck effective permissions before any manual Job. The
-    CronJob remains suspended until a published, reviewed image is tested.
+    deploy. No self-hosted runner or GitHub kubeconfig is needed. Home MicroK8s
+    runs `RBAC,Node`; the releaser identity was verified to be denied Secrets,
+    pod exec, lists and other Deployments. Recheck after RBAC changes. The
+    CronJob remains suspended until recurring rollout is separately approved.
 
 ## Rollout and recovery
 

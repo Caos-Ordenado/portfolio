@@ -12,6 +12,8 @@ Request JSON: `{"title":"...","body":"...","message":"...","files":[{"path":"ser
 
 An authorized admin terminal model may submit proposed source files to this broker. A valid proposal **immediately opens a PUBLIC GitHub PR visible before human review**; there is no approval step before PR publication. CI and human reviews gate **merge and deployment**, not PR creation. Treat titles, descriptions and file contents as public at submission time; do not send secrets or private data. The path and size caps still apply.
 
+After creating the PR, the broker asks GitHub to queue squash auto-merge using its scoped GitHub App installation token. GitHub still enforces the protected branch's required check and independent owner review. The response includes `auto_merge_queued`; if the request fails, the already published PR remains open for manual review and the broker does not delete its branch. The former GitHub Actions request workflow was removed because its `GITHUB_TOKEN` cannot invoke `enablePullRequestAutoMerge`. The private key and installation token never reach the terminal or GitHub Actions.
+
 ## Reproducible image dependencies
 
 The Dockerfile pins the Linux amd64 Python base image by its platform-specific manifest digest (checked with `docker buildx imagetools inspect python:3.13-slim`). Runtime dependencies, including transitive dependencies, are version- and SHA-256-locked in `requirements.lock`. The Docker build uses `pip --require-hashes --only-binary` and copies the app source directly; it does not resolve or install the local package or pull unpinned build dependencies. Build for `linux/amd64` only.
