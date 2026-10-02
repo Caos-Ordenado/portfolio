@@ -1,13 +1,15 @@
 # Open Terminal pilot (home MicroK8s only)
 
-Phase 2 private `infra` review is **not live**. Its separately gated, zero-replica
-manifests and operator runbook are in [infra-review/README.md](infra-review/README.md).
-Do not include that overlay in this portfolio pilot or attach its connection until
-the review-only broker contract and repo-scoped token behavior are verified.
+Phase 2 private `infra` review is staged internally but **not connected to WebUI**.
+Its separate, zero-replica-by-default manifests and operator runbook are in
+[infra-review/README.md](infra-review/README.md). Home MicroK8s now has both
+private Pods manually scaled to one for isolation and snapshot verification.
+Do not include that overlay in this portfolio pilot or attach its WebUI connection
+until effective admin-only access and private-source handling are verified.
 The GitHub App is installed on exactly `portfolio` and private `infra`; each
 broker must request a token for **its own** repository only. Phase 2 broker
-source and its locally imported digest are staged; the overlay remains at zero
-replicas until the reviewed PR is merged and rollout gates pass.
+source and its locally imported digest are staged; the checked-in overlay
+continues to default to zero replicas for rollback.
 The infra terminal has no DNS/public HTTPS egress: only its in-namespace broker
 on TCP 8001 via a Kubernetes-injected Service host. Its audited private snapshot
 SHA is supplied out-of-git in an operator-owned ConfigMap, not public YAML.
