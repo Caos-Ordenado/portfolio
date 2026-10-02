@@ -1,25 +1,26 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: code-agent-pr-broker
+  name: infra-pr-broker
   namespace: code-agent
   labels:
-    app: code-agent-pr-broker
+    app: infra-pr-broker
     tier: code-agent
     environment: pilot
 spec:
-  replicas: 1
+  # Keep inactive until the reviewed PR is merged and runtime checks pass.
+  replicas: 0
   revisionHistoryLimit: 3
   selector:
     matchLabels:
-      app: code-agent-pr-broker
+      app: infra-pr-broker
   template:
     metadata:
       labels:
-        app: code-agent-pr-broker
+        app: infra-pr-broker
         tier: code-agent
         environment: pilot
-        version: pilot-1
+        version: pilot-6-review
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -30,9 +31,8 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: pr-broker
-          # Reviewed local build from the locked broker image, imported on caos.
-          image: docker.io/library/code-agent-pr-broker@sha256:44a23d8e54d53d2d0284ee7ad6f8c0c15b3588ff8e846075098fa473cf569f0e
+        - name: infra-pr-broker
+          image: docker.io/library/code-agent-pr-broker@sha256:4c7e3b6fb00d292c6111d356efb846267041cc0be3e9ca10bd6b194f2f2c03e0
           imagePullPolicy: Never
           securityContext:
             allowPrivilegeEscalation: false
@@ -45,7 +45,12 @@ spec:
               protocol: TCP
           env:
             - name: REVIEW_REPOSITORY
-              value: portfolio
+              value: infra
+            - name: REVIEW_SNAPSHOT_SHA
+              valueFrom:
+                configMapKeyRef:
+                  name: infra-review-snapshot
+                  key: MAIN_SHA
             - name: GITHUB_APP_ID
               valueFrom:
                 secretKeyRef:

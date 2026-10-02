@@ -26,8 +26,10 @@ separate in-cluster controller's GitHub run polling.
 
 The private PR broker (`services/code_agent_pr_broker/`) uses the scoped
 `home-lab-terminal-app` installation token to create source-only PRs and request
-squash auto-merge. GitHub's protected `main` still requires the `checks` job and
-an independent owner review before it merges. The App key stays in the broker,
+squash auto-merge. Protected `main` requires `checks` for every PR. A separate
+review-only GitHub ruleset requires an owner review for App-authored PRs, while
+`Caos-Ordenado` may bypass that ruleset when merging their own PRs. The App
+key stays in the broker,
 not in chat, the terminal, or GitHub Actions. The previous
 `pull_request_target` request workflow was removed: GitHub denies its minimal
 `GITHUB_TOKEN` the `enablePullRequestAutoMerge` mutation, and a merge initiated
@@ -35,10 +37,14 @@ with `GITHUB_TOKEN` would not reliably trigger the downstream push workflow.
 
 ## Trust and release configuration
 
-1. Protect `main`: require PR review, the `checks` PR status, CODEOWNERS approval
-   for `.github/workflows/**`, the Dockerfile, lockfile, shared build inputs and
-   deployment manifests; prohibit direct/force pushes and restrict workflow
-   edits. The source-only gate is not a sandbox: a reviewed workflow or base
+1. Protect `main`: require PRs and `checks` in branch protection for every
+   actor, including admins. In a separate review-only ruleset targeting `main`,
+   require one review and CODEOWNER approval, with only `Caos-Ordenado` (user ID
+   130296975) permitted to bypass the ruleset on pull requests. The GitHub App
+   must not bypass it. This lets the owner merge their own PR after `checks`
+   while preserving the App PR review gate. Retain CODEOWNERS, prohibit
+   direct/force pushes and restrict workflow edits. The source-only gate is not
+   a sandbox: a reviewed workflow or base
    image change can affect later trusted builds. Keep the Dockerfile base image
    digest pinned and runtime dependencies hashed in `requirements.lock`.
 2. Allow the repository's `GITHUB_TOKEN` to publish to
@@ -77,6 +83,19 @@ with `GITHUB_TOKEN` would not reliably trigger the downstream push workflow.
     The one-shot rollout and manual rollback drill passed; the reviewed
     `k8s/openwebui_tools/releaser.yaml` enables recurrence after separate owner
     approval. Check its effective RBAC and every scheduled Job.
+
+### Review-rule migration
+
+Create and verify the review-only ruleset **before** lowering GitHub's global
+approval count to zero. The ruleset bypass is `pull_request` for user
+`Caos-Ordenado` only; it does not bypass branch protection's `checks`, PR-only
+merge, admin enforcement or conversation resolution. After the ruleset is
+active, lower only the redundant branch-protection approval count to zero
+and disable its CODEOWNER requirement (retaining PR-only merge). Confirm a checked
+owner-authored PR merges without a second reviewer, and an unapproved App PR
+remains blocked until the owner approves its current head. If the ruleset
+does not enforce that boundary, restore the branch-protection review requirement and
+leave the new broker inactive pending correction.
 
 ## Rollout and recovery
 

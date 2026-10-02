@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: infra-pr-broker
+  namespace: code-agent
+  labels:
+    app: infra-pr-broker
+    tier: code-agent
+    environment: pilot
+spec:
+  type: ClusterIP
+  selector:
+    app: infra-pr-broker
+  ports:
+    - name: http
+      port: 8001
+      targetPort: http
+      protocol: TCP
