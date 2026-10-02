@@ -1,5 +1,17 @@
 # Open Terminal pilot (home MicroK8s only)
 
+Phase 2 private `infra` review is **not live**. Its separately gated, zero-replica
+manifests and operator runbook are in [infra-review/README.md](infra-review/README.md).
+Do not include that overlay in this portfolio pilot or attach its connection until
+the review-only broker contract and repo-scoped token behavior are verified.
+The GitHub App is installed on exactly `portfolio` and private `infra`; each
+broker must request a token for **its own** repository only. Phase 2 broker
+source and its locally imported digest are staged; the overlay remains at zero
+replicas until the reviewed PR is merged and rollout gates pass.
+The infra terminal has no DNS/public HTTPS egress: only its in-namespace broker
+on TCP 8001 via a Kubernetes-injected Service host. Its audited private snapshot
+SHA is supplied out-of-git in an operator-owned ConfigMap, not public YAML.
+
 Single-admin coding workspace, **not a multi-tenant sandbox**. This directory is intentionally absent from the root kustomization. Open WebUI is already reachable publicly at `chat.reyops.com` (new signups may be pending). A disconnected pod may be staged to test runtime isolation; **do not connect it to Open WebUI** until an operator has verified effective admin-only Open Terminal access controls in the running version. No terminal Ingress, Traefik path/host route, NodePort, or public endpoint is provided. Open WebUI (`default` namespace) must proxy the system-level integration to `http://open-terminal.code-agent.svc.cluster.local:8000`; do not add a browser/user-level direct connection.
 
 The isolated runtime was tested on home MicroK8s before attaching it to Open WebUI: hardened image started, PVC bound, GitHub HTTPS resolved, private/cluster destinations timed out, non-WebUI pod ingress timed out, and missing/invalid keys returned 401 from the WebUI pod. Subsequently the admin-only system connection was installed: one approved non-admin test user received an empty terminal list and 403 from the proxy, then was removed; the connection has zero access grants, its key matches the Kubernetes Secret, and the public unauthenticated endpoint returns 401. The upstream `:v0.14.0` image tag did not exist, and the upstream `:0.14.0` image could not start with no-new-privileges until the local Dockerfile removed its file capability.
@@ -67,7 +79,7 @@ The pinned and hash-locked image was built on `caos`; the internal broker is run
      --from-file=private-key.pem="$PEM_FILE"
    ```
 
-    IDs above identify the verified installation limited to `Caos-Ordenado/portfolio` with only Contents and Pull requests write. Never put the PEM in a shell argument, logs, git, ConfigMap or terminal PVC. `kubectl -n code-agent get secret code-agent-github-app` checks existence without displaying data. If it already exists, stop and plan deliberate rotation; do not blindly replace. Protect Kubernetes Secret storage with cluster RBAC/encryption-at-rest controls.
+     IDs above identify the verified installation limited to `Caos-Ordenado/portfolio` and private `Caos-Ordenado/infra`, with Contents and Pull requests write and Metadata read. The App credential is shared, so each broker must request an installation token restricted to its own repository. Never put the PEM in a shell argument, logs, git, ConfigMap or terminal PVC. `kubectl -n code-agent get secret code-agent-github-app` checks existence without displaying data. If it already exists, stop and plan deliberate rotation; do not blindly replace. Protect Kubernetes Secret storage with cluster RBAC/encryption-at-rest controls.
 4. After image and secret checks, apply only this overlay from `portfolio/`: `kubectl apply -k k8s/code-agent`. This also updates the terminal egress policy, so recheck terminal isolation. `kubectl -n code-agent rollout status deployment/code-agent-pr-broker --timeout=300s` and `kubectl -n code-agent get pods,svc,networkpolicy` must show a ready broker, ClusterIP-only service and both isolation policies. Do not wire an unreviewed bot endpoint into terminal automation.
 5. From the terminal pod, test `/health` (no PR/write request): `kubectl -n code-agent exec deployment/open-terminal -- python3 -c 'import urllib.request; print(urllib.request.urlopen("http://code-agent-pr-broker.code-agent.svc.cluster.local:8001/health", timeout=5).status)'`. From a separate approved non-terminal diagnostic pod in `code-agent` and a pod in another namespace, confirm TCP 8001 is denied; delete diagnostic pods after testing. Test broker DNS/public HTTPS to GitHub and denied RFC1918/Tailscale/cluster-local egress using approved read-only probes; do not log tokens or PEM. Verify non-admin Open WebUI still cannot access the terminal before enabling any workflow.
 

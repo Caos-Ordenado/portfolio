@@ -22,12 +22,91 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 logger = logging.getLogger(__name__)
 API = "https://api.github.com"
 REPO = "Caos-Ordenado/portfolio"
+REVIEW_REPOS = {"portfolio": REPO, "infra": "Caos-Ordenado/infra"}
 PREFIX = "services/openwebui_tools/src/"
 BRANCH_PREFIX = "agent/openwebui-tools/"
 BOT_LOGIN = "home-lab-terminal-app[bot]"
 MAX_BODY = 256 * 1024
 MAX_BYTES = 64 * 1024
 SHA = re.compile(r"[a-fA-F0-9]{40}")
+REVIEW_BRANCH_PREFIX = "agent/review/"
+TEXT_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".vue", ".css", ".scss", ".html", ".json", ".md", ".yaml", ".yml", ".sh", ".svg"}
+PORTFOLIO_SOURCE = (
+    "services/renderer/", "services/web_crawler/", "services/openwebui_tools/",
+    "agents/product_search_agent/", "shared/shared/shared/",
+)
+PORTFOLIO_K8S_WORKLOADS = {"renderer", "web_crawler", "llama"}
+INFRA_SITES = ("services/web/", "services/web_espacioraizconsciente/")
+SITE_DIRS = ("pages/", "components/", "server/", "assets/")
+DENIED_PARTS = {".github", ".git", ".nuxt", ".output", "node_modules", "dist", "build",
+                "__pycache__", "secrets", "certs", "credentials", "generated", "vendor"}
+DENIED_NAMES = {"agents.md", ".gitmodules", "dockerfile", "package-lock.json", "pnpm-lock.yaml"}
+SENSITIVE = re.compile(r"(?i)(secret|credential|password|private[_-]?key|token|webhook|auth|\.env|\.pem|\.key|\.p12|\.pfx)")
+KEY_MATERIAL = re.compile(r"-----BEGIN (?:[A-Z ]*PRIVATE KEY|OPENSSH PRIVATE KEY)-----")
+
+
+def review_repository() -> str:
+    name = os.environ.get("REVIEW_REPOSITORY", "")
+    if name not in REVIEW_REPOS:
+        raise RuntimeError("invalid review repository configuration")
+    return name
+
+
+def allowed_review_path(repo: str, path: str) -> bool:
+    if repo not in REVIEW_REPOS or not path or "\\" in path or not path.isascii() or any(ord(ch) < 32 or ord(ch) == 127 for ch in path):
+        return False
+    parts = path.split("/")
+    if any(not part or part in (".", "..") or part.startswith(".") or part.casefold() in DENIED_PARTS or SENSITIVE.search(part) for part in parts):
+        return False
+    name = parts[-1]
+    if name.casefold() in DENIED_NAMES or name.casefold().startswith("dockerfile") or (name.casefold().startswith("deploy") and name.casefold().endswith(".sh")) or Path(name).suffix.lower() not in TEXT_EXTENSIONS:
+        return False
+    if repo == "portfolio":
+        if path.startswith("k8s/"):
+            return len(parts) >= 3 and parts[1] in PORTFOLIO_K8S_WORKLOADS and Path(name).suffix.lower() in {".yaml", ".yml", ".md"}
+        return Path(name).suffix == ".py" and (
+            any(path.startswith(root + directory) for root in PORTFOLIO_SOURCE[:-1] for directory in ("src/", "tests/"))
+            or path.startswith("shared/shared/shared/") or path.startswith("shared/shared/tests/")
+        )
+    if path.startswith("k8s/") or path.startswith("hosting/k3s/"):
+        return Path(name).suffix.lower() in {".yaml", ".yml", ".md"}
+    if path.startswith("hosting/"):
+        return len(parts) == 2 and Path(name).suffix.lower() in {".sh", ".md", ".yaml", ".yml"}
+    return any(path.startswith(site + directory) for site in INFRA_SITES for directory in SITE_DIRS) and Path(name).suffix.lower() in TEXT_EXTENSIONS - {".py", ".sh", ".md", ".yaml", ".yml"}
+
+
+class ReviewFile(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    path: str
+    content: str
+
+
+class ReviewProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    title: str = Field(min_length=1, max_length=200)
+    body: str = Field(max_length=16000)
+    message: str = Field(min_length=1, max_length=200)
+    expected_base_sha: str
+    files: list[ReviewFile] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def check_files(self) -> "ReviewProposal":
+        if not SHA.fullmatch(self.expected_base_sha):
+            raise ValueError("invalid base SHA")
+        if len({f.path for f in self.files}) != len(self.files):
+            raise ValueError("duplicate paths")
+        if not self.title.strip() or not self.message.strip():
+            raise ValueError("blank title or message")
+        try:
+            total = sum(len(f.content.encode("utf-8")) for f in self.files)
+        except UnicodeEncodeError:
+            raise ValueError("contents must be UTF-8 encodable") from None
+        if total > MAX_BYTES or any(
+            KEY_MATERIAL.search(f.content) or any(ord(ch) < 32 and ch not in "\n\r\t" or ord(ch) == 127 for ch in f.content)
+            for f in self.files
+        ):
+            raise ValueError("invalid file content")
+        return self
 
 
 class ProposalFile(BaseModel):
@@ -76,6 +155,22 @@ class UpstreamError(Exception):
     pass
 
 
+class StaleBaseError(Exception):
+    pass
+
+
+def check_review_base(proposal: ReviewProposal, repository: str, live_sha: str) -> None:
+    expected = proposal.expected_base_sha.lower()
+    if repository == "infra":
+        snapshot = os.environ.get("REVIEW_SNAPSHOT_SHA", "")
+        if not SHA.fullmatch(snapshot):
+            raise RuntimeError("infra review snapshot unavailable")
+        if snapshot.lower() != expected:
+            raise StaleBaseError("snapshot does not match proposal")
+    if live_sha.lower() != expected:
+        raise StaleBaseError("main has changed")
+
+
 def require_sha(value: Any) -> str:
     if not isinstance(value, str) or not SHA.fullmatch(value):
         raise UpstreamError("invalid GitHub SHA")
@@ -97,8 +192,11 @@ def app_jwt() -> str:
 
 
 class GitHub:
-    def __init__(self, client: httpx.AsyncClient):
+    def __init__(self, client: httpx.AsyncClient, repository: str = "portfolio"):
+        if repository not in REVIEW_REPOS:
+            raise ValueError("invalid repository")
         self.client = client
+        self.repository = repository
 
     async def request(self, method: str, path: str, token: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         try:
@@ -135,7 +233,7 @@ class GitHub:
         if not installation.isdecimal():
             raise RuntimeError("GitHub installation configuration unavailable")
         data = await self.request("POST", f"/app/installations/{installation}/access_tokens", app_jwt(),
-                                  {"repositories": ["portfolio"], "permissions": {"contents": "write", "pull_requests": "write"}})
+                                   {"repositories": [self.repository], "permissions": {"contents": "write", "pull_requests": "write"}})
         token = data.get("token")
         if not isinstance(token, str) or not token:
             raise UpstreamError("invalid installation token response")
@@ -160,6 +258,8 @@ class GitHub:
 
     async def retry_ready_auto_merges(self) -> None:
         """Re-request auto-merge once GitHub reports all protected gates clean."""
+        if self.repository != "portfolio" or review_repository() != "portfolio":
+            raise RuntimeError("auto-merge unavailable in this deployment")
         token = await self.installation_token()
         root = f"/repos/{REPO}"
         prs: list[dict[str, Any]] = []
@@ -222,10 +322,27 @@ class GitHub:
                 logger.info("auto_merge_ready_pr=%s", number)
 
     async def create_proposal(self, proposal: Proposal) -> dict[str, Any]:
+        if self.repository != "portfolio" or review_repository() != "portfolio":
+            raise RuntimeError("legacy proposals unavailable in this deployment")
+        return await self._create_pr(proposal, REPO, BRANCH_PREFIX, auto_merge=True)
+
+    async def create_review_proposal(self, proposal: ReviewProposal) -> dict[str, Any]:
+        if self.repository != review_repository():
+            raise RuntimeError("review repository mismatch")
+        if any(not allowed_review_path(self.repository, file.path) for file in proposal.files):
+            raise ValueError("review path not allowed")
+        if self.repository == "infra":
+            # Reject missing/invalid operator configuration before requesting a token.
+            check_review_base(proposal, self.repository, proposal.expected_base_sha)
+        return await self._create_pr(proposal, REVIEW_REPOS[self.repository], REVIEW_BRANCH_PREFIX, auto_merge=False)
+
+    async def _create_pr(self, proposal: Proposal | ReviewProposal, repo: str, branch_prefix: str, *, auto_merge: bool) -> dict[str, Any]:
         token = await self.installation_token()
-        root = f"/repos/{REPO}"
+        root = f"/repos/{repo}"
         ref = await self.request("GET", f"{root}/git/ref/heads/main", token)
         base_sha = require_sha(ref.get("object", {}).get("sha") if isinstance(ref.get("object"), dict) else None)
+        if isinstance(proposal, ReviewProposal):
+            check_review_base(proposal, self.repository, base_sha)
         commit = await self.request("GET", f"{root}/git/commits/{base_sha}", token)
         tree_sha = require_sha(commit.get("tree", {}).get("sha") if isinstance(commit.get("tree"), dict) else None)
         tree = await self.request("GET", f"{root}/git/trees/{tree_sha}?recursive=1", token)
@@ -254,6 +371,12 @@ class GitHub:
             changes.append((file, mode))
         if not changes:
             raise ValueError("proposal contains no changes")
+        if isinstance(proposal, ReviewProposal):
+            current = await self.request("GET", f"{root}/git/ref/heads/main", token)
+            current_sha = require_sha(current.get("object", {}).get("sha") if isinstance(current.get("object"), dict) else None)
+            check_review_base(proposal, self.repository, current_sha)
+            if current_sha.lower() != base_sha.lower():
+                raise StaleBaseError("main has changed")
         new_entries = []
         for file, mode in changes:
             blob = await self.request("POST", f"{root}/git/blobs", token,
@@ -265,7 +388,7 @@ class GitHub:
         new_commit = await self.request("POST", f"{root}/git/commits", token,
                                         {"message": proposal.message, "tree": require_sha(new_tree.get("sha")),
                                          "parents": [base_sha]})
-        branch = BRANCH_PREFIX + secrets.token_hex(12)
+        branch = branch_prefix + secrets.token_hex(12)
         await self.request("POST", f"{root}/git/refs", token,
                            {"ref": f"refs/heads/{branch}", "sha": require_sha(new_commit.get("sha"))})
         # If PR creation fails, best-effort remove the orphan branch; never mask the original error.
@@ -274,7 +397,7 @@ class GitHub:
                                     {"title": proposal.title, "body": proposal.body, "head": branch, "base": "main"})
             url = pr.get("html_url")
             number = pr.get("number")
-            if not isinstance(url, str) or not url.startswith(f"https://github.com/{REPO}/pull/") or type(number) is not int:
+            if not isinstance(url, str) or not url.startswith(f"https://github.com/{repo}/pull/") or type(number) is not int:
                 raise UpstreamError("invalid pull request response")
         except UpstreamError:
             try:
@@ -286,9 +409,11 @@ class GitHub:
         # The App token (unlike GITHUB_TOKEN in pull_request_target) may request
         # auto-merge. GitHub still requires protected-branch checks and review.
         # An auto-merge error must never delete an already published PR/branch.
-        queued = await self.request_auto_merge(token, pr.get("node_id"))
-        if not queued:
-            logger.warning("auto_merge_not_queued")
+        queued = False
+        if auto_merge:
+            queued = await self.request_auto_merge(token, pr.get("node_id"))
+            if not queued:
+                logger.warning("auto_merge_not_queued")
         return {"url": url, "number": number, "branch": branch, "auto_merge_queued": queued}
 
 
@@ -304,15 +429,16 @@ async def poll_auto_merges() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    task = asyncio.create_task(poll_auto_merges())
+    task = asyncio.create_task(poll_auto_merges()) if review_repository() == "portfolio" else None
     try:
         yield
     finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
 
 app = FastAPI(title="Code agent PR broker", lifespan=lifespan)
@@ -320,7 +446,7 @@ app = FastAPI(title="Code agent PR broker", lifespan=lifespan)
 
 @app.middleware("http")
 async def limit_body(request: Request, call_next: Any) -> Any:
-    if request.url.path == "/proposals":
+    if request.url.path in ("/proposals", "/review-proposals"):
         size = 0
         chunks = []
         async for chunk in request.stream():
@@ -344,6 +470,8 @@ async def health() -> dict[str, str]:
 
 @app.post("/proposals")
 async def proposals(proposal: Proposal, request: Request) -> dict[str, Any]:
+    if review_repository() != "portfolio":
+        raise HTTPException(status_code=404, detail="not found")
     try:
         # No caller-controlled URL, repository or ref reaches the client.
         async with httpx.AsyncClient(timeout=httpx.Timeout(20.0), follow_redirects=False) as client:
@@ -353,4 +481,22 @@ async def proposals(proposal: Proposal, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="proposal contains no changes") from None
     except (UpstreamError, RuntimeError, OSError, jwt.PyJWTError, asyncio.TimeoutError):
         logger.warning("proposal_creation_failed", exc_info=False)
+        raise HTTPException(status_code=502, detail="proposal could not be created") from None
+
+
+@app.post("/review-proposals")
+async def review_proposals(proposal: ReviewProposal, request: Request) -> dict[str, Any]:
+    repo = review_repository()
+    if any(not allowed_review_path(repo, file.path) for file in proposal.files):
+        raise HTTPException(status_code=422, detail="invalid proposal")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0), follow_redirects=False) as client:
+            github = getattr(request.app.state, "github", None) or GitHub(client, repo)
+            return await github.create_review_proposal(proposal)
+    except StaleBaseError:
+        raise HTTPException(status_code=409, detail="main has changed") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid proposal") from None
+    except (UpstreamError, RuntimeError, OSError, jwt.PyJWTError, asyncio.TimeoutError):
+        logger.warning("review_proposal_creation_failed", exc_info=False)
         raise HTTPException(status_code=502, detail="proposal could not be created") from None

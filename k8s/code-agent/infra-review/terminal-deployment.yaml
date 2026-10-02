@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: infra-terminal
+  namespace: code-agent
+  labels:
+    app: infra-terminal
+    tier: code-agent
+    environment: pilot
+spec:
+  # Fail closed: do not run until a reviewed review-only broker image is ready.
+  replicas: 0
+  revisionHistoryLimit: 3
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: infra-terminal
+  template:
+    metadata:
+      labels:
+        app: infra-terminal
+        tier: code-agent
+        environment: pilot
+        version: v0-14-0
+    spec:
+      automountServiceAccountToken: false
+      # The broker Service must exist before this Pod is created; no DNS egress.
+      enableServiceLinks: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: infra-terminal
+          # Locally imported hardened image; digest alias verified on home-server.
+          image: docker.io/library/open-terminal-hardened@sha256:ba406e1b6806df333a09b2e7a387e1a680c7a387f176af2916755bb549f9c13b
+          imagePullPolicy: Never
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: OPEN_TERMINAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: infra-terminal-api-key
+                  key: OPEN_TERMINAL_API_KEY
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: home
+              mountPath: /home/user
+            - name: snapshot-sha
+              mountPath: /run/review-snapshot
+              readOnly: true
+      volumes:
+        - name: snapshot-sha
+          configMap:
+            name: infra-review-snapshot
+            items:
+              - key: MAIN_SHA
+                path: MAIN_SHA
+        - name: home
+          persistentVolumeClaim:
+            claimName: infra-terminal-home

@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Deliberately NOT referenced from ../kustomization.yaml or the portfolio root.
+# Phase 2 review mode is not implemented in the pinned broker image yet.
+resources:
+  - pvc.yaml
+  - terminal-service.yaml
+  - terminal-deployment.yaml
+  - terminal-networkpolicy.yaml
+  - broker-service.yaml
+  - broker-deployment.yaml
+  - broker-networkpolicy.yaml
