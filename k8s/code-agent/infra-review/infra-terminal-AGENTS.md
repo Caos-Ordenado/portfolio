@@ -32,3 +32,21 @@ review and `checks` gate merge. If the broker returns 409, stop and ask the
 operator to audit and stage a fresh snapshot. Do not submit a proposal or
 assume the current broker image supports infra review until the operator
 explicitly enables and tests it. Report any failed boundary check and stop.
+
+For incidents, the only other approved destination is the internal
+`cluster-diagnostics` Service on TCP 8002 after its operator-reviewed rollout.
+Its Service must exist before this Pod is started so Kubernetes injects
+`CLUSTER_DIAGNOSTICS_SERVICE_HOST`; stop if unset. Query
+`http://$CLUSTER_DIAGNOSTICS_SERVICE_HOST:8002/kinds`, then
+`/resources?kind=pods` with pagination and
+`/logs?namespace=observability&pod=NAME&tail=100` as needed. It returns
+read-only summaries and bounded logs from every namespace, never Secret
+objects or Kubernetes write credentials. Send
+`Authorization: Bearer <CLUSTER_DIAGNOSTICS_KEY>` using the environment variable
+without printing it: construct the `urllib.request.Request` header inside Python
+using `os.environ["CLUSTER_DIAGNOSTICS_KEY"]`. Never expand the key in `curl -H`,
+the shell command line or a URL; do not enable shell tracing or log headers.
+The owner authorized raw logs entering model context for diagnosis. Logs may
+contain private data: do not copy them into public PRs or needlessly repeat them
+in final responses. Summarize failures without sensitive values before
+proposing a private fix.

@@ -6,16 +6,18 @@ from `../kustomization.yaml` and the portfolio root. Both Deployments default to
 to home MicroK8s and the two private workloads were manually scaled to one for
 isolated testing. The pinned pilot-6 image was verified on caos; repository-scoped
 authorization, denied cross-broker ingress, terminal DNS/public egress, and the
-curated snapshot's 45 Git blobs were tested. No new Open WebUI connection was
-created in this rollout. Do not enable one before effective admin-only access,
-retention and model data handling have been checked in the running WebUI.
+curated snapshot's 45 Git blobs were tested. The owner subsequently added a
+separate WebUI connection; do not broaden its admin-only access. Confirm
+retention and model data handling for private source in the running WebUI.
 No new Kubernetes deployer, public
 auto-deploy, direct git push, Ingress, IngressRoute, Traefik prefix, NodePort or
 LoadBalancer is included. Existing portfolio terminal/broker stay unchanged.
 
 `infra-terminal.code-agent.svc.cluster.local:8000` is ClusterIP-only, with
 ingress from `default`/`app=openwebui` on 8000 and egress **only** to
-in-namespace `app=infra-pr-broker` pods on TCP 8001. It has **no DNS egress**,
+in-namespace `app=infra-pr-broker` pods on TCP 8001 plus the separate
+read-only `app=cluster-diagnostics` pods on TCP 8002 after their reviewed
+rollout. It has **no DNS egress**,
 public HTTPS egress (including GitHub), or other IP egress. Create the broker
 Service before creating the terminal Pod so Kubernetes injects
 `INFRA_PR_BROKER_SERVICE_HOST`; the tracked `infra-terminal-AGENTS.md` uses
@@ -31,7 +33,8 @@ selectors overlapping these new pods; an additional allow rule can defeat
 isolation. No Kubernetes service account token in either pod.
 
 The terminal has its **own** RWO PVC (`infra-terminal-home`) and **own** Secret
-(`infra-terminal-api-key`, key `OPEN_TERMINAL_API_KEY`). It does not receive the
+(`infra-terminal-api-key`, key `OPEN_TERMINAL_API_KEY`), plus a separate
+diagnostic HTTP key after that overlay's approved rollout. It does not receive the
 GitHub App PEM or IDs. The broker references existing `code-agent-github-app`
 keys `APP_ID`, `INSTALLATION_ID`, and `private-key.pem`, mounted read-only; no
 Secret value is stored in this repo or a ConfigMap. Never grant the terminal
@@ -220,7 +223,7 @@ Inspect redacted logs (`kubectl -n code-agent logs deployment/infra-pr-broker`)
    DNS (UDP/TCP 53) and public HTTPS fail, injected Service IP-to-broker 8001
    works, OpenWebUI-to-broker and portfolio
 terminal-to-infra-broker fail, other pods cannot reach the infra terminal,
-   infra terminal cannot reach DNS/public HTTPS/cluster/private/Tailscale endpoints,
+   infra terminal cannot reach DNS/public HTTPS/other cluster/private/Tailscale endpoints,
 and broker cannot reach private/Tailscale/cluster targets but can reach GitHub
 HTTPS. Remove diagnostic pods. Repeat negative non-admin and pending-user
 WebUI tests, verify only private review proposals with the expected SHA and

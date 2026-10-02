@@ -44,6 +44,11 @@ spec:
               containerPort: 8000
               protocol: TCP
           env:
+            - name: CLUSTER_DIAGNOSTICS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cluster-diagnostics-api-keys
+                  key: PORTFOLIO_KEY
             - name: OPEN_TERMINAL_API_KEY
               valueFrom:
                 secretKeyRef:
