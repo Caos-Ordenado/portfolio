@@ -32,3 +32,20 @@ No GitHub write credentials, Kubernetes access, BuildKit socket or host SSH
 credentials are present in this terminal. If a request requires another repo,
 service, security setting or deployment workflow, explain the required review
 and stop rather than trying to bypass the broker's allowlist.
+
+For incident diagnosis, the internal `cluster-diagnostics` Service is available
+on TCP 8002 when the operator has enabled it. Use
+`http://cluster-diagnostics.code-agent.svc.cluster.local:8002/kinds` to discover
+resource types, `/resources?kind=pods` (paginate using `continue`) to inspect
+all namespaces, and `/logs?namespace=observability&pod=NAME&tail=100` for
+bounded pod logs. Inspect other workload kinds and events before proposing a
+cause. This service is read-only: no Secret contents, Kubernetes credentials,
+exec, or deployment controls are available. Send
+`Authorization: Bearer <CLUSTER_DIAGNOSTICS_KEY>` using the environment variable
+without printing it: build the `urllib.request.Request` header inside Python
+using `os.environ["CLUSTER_DIAGNOSTICS_KEY"]`. Never expand the key in `curl -H`,
+the shell command line or a URL; do not enable shell tracing or log headers.
+The owner authorized raw logs entering model context for diagnosis, including
+the risk of public egress; avoid reproducing raw logs in a public PR or final
+response. Summarize relevant errors without their sensitive values. The existing public PR broker's allowlist
+still applies; diagnosing a service does not authorize submitting its files.

@@ -24,6 +24,14 @@ spec:
         - protocol: TCP
           port: 8000
   egress:
+    # Same-namespace diagnostics only; no API token is mounted in this terminal.
+    - to:
+        - podSelector:
+            matchLabels:
+              app: cluster-diagnostics
+      ports:
+        - protocol: TCP
+          port: 8002
     # Only the in-namespace PR broker may receive terminal traffic on 8001.
     - to:
         - podSelector:

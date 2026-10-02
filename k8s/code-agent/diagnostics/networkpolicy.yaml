@@ -1,0 +1,39 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cluster-diagnostics-isolation
+  namespace: code-agent
+  labels:
+    app: cluster-diagnostics
+spec:
+  podSelector:
+    matchLabels:
+      app: cluster-diagnostics
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        # podSelector alone selects only pods in this namespace.
+        - podSelector:
+            matchLabels:
+              app: open-terminal
+        - podSelector:
+            matchLabels:
+              app: infra-terminal
+      ports:
+        - protocol: TCP
+          port: 8002
+  egress:
+    # MicroK8s API Service VIP; verify CNI Service DNAT/NetworkPolicy ordering.
+    - to:
+        - ipBlock:
+            cidr: 10.152.183.1/32
+      ports:
+        - protocol: TCP
+          port: 443
+    # Observed backing endpoint on home MicroK8s; needed when policy sees post-DNAT IP.
+    - to:
+        - ipBlock:
+            cidr: 192.168.68.6/32
+      ports:
+        - protocol: TCP
+          port: 16443

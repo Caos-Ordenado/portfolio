@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cluster-diagnostics
+  namespace: code-agent
+  labels:
+    app: cluster-diagnostics
+    tier: code-agent
+    environment: pilot
+spec:
+  # Review and verify RBAC, network policy and runtime before scaling above zero.
+  replicas: 0
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: cluster-diagnostics
+  template:
+    metadata:
+      labels:
+        app: cluster-diagnostics
+        tier: code-agent
+        environment: pilot
+    spec:
+      serviceAccountName: cluster-diagnostics
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: diagnostics
+          image: docker.io/library/cluster-diagnostics@sha256:bf7b60c7a703ebef1cbb9ee92fe0e0645e36c1160b0842a801348384891f28c2
+          imagePullPolicy: Never
+          env:
+            - name: KUBERNETES_SERVICE_HOST
+              value: "10.152.183.1"
+            - name: KUBERNETES_SERVICE_PORT
+              value: "443"
+            - name: DIAGNOSTICS_PORTFOLIO_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cluster-diagnostics-api-keys
+                  key: PORTFOLIO_KEY
+            - name: DIAGNOSTICS_INFRA_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: cluster-diagnostics-api-keys
+                  key: INFRA_KEY
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: 8002
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

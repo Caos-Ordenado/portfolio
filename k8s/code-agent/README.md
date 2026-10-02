@@ -14,6 +14,12 @@ The infra terminal has no DNS/public HTTPS egress: only its in-namespace broker
 on TCP 8001 via a Kubernetes-injected Service host. Its audited private snapshot
 SHA is supplied out-of-git in an operator-owned ConfigMap, not public YAML.
 
+The opt-in [diagnostics overlay](diagnostics/README.md) gives both terminals
+read-only resource summaries and bounded pod logs across all namespaces through
+an internal service. Only that service holds a scoped Kubernetes ServiceAccount
+token; neither terminal gains direct Kubernetes API, Secret or write access.
+Its NetworkPolicy allowance is limited to TCP 8002 within `code-agent`.
+
 Single-admin coding workspace, **not a multi-tenant sandbox**. This directory is intentionally absent from the root kustomization. Open WebUI is already reachable publicly at `chat.reyops.com` (new signups may be pending). A disconnected pod may be staged to test runtime isolation; **do not connect it to Open WebUI** until an operator has verified effective admin-only Open Terminal access controls in the running version. No terminal Ingress, Traefik path/host route, NodePort, or public endpoint is provided. Open WebUI (`default` namespace) must proxy the system-level integration to `http://open-terminal.code-agent.svc.cluster.local:8000`; do not add a browser/user-level direct connection.
 
 The isolated runtime was tested on home MicroK8s before attaching it to Open WebUI: hardened image started, PVC bound, GitHub HTTPS resolved, private/cluster destinations timed out, non-WebUI pod ingress timed out, and missing/invalid keys returned 401 from the WebUI pod. Subsequently the admin-only system connection was installed: one approved non-admin test user received an empty terminal list and 403 from the proxy, then was removed; the connection has zero access grants, its key matches the Kubernetes Secret, and the public unauthenticated endpoint returns 401. The upstream `:v0.14.0` image tag did not exist, and the upstream `:0.14.0` image could not start with no-new-privileges until the local Dockerfile removed its file capability.
