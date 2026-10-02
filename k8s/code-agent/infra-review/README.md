@@ -1,10 +1,14 @@
-# Phase 2: private infra review (NOT authorized for rollout)
+# Phase 2: private infra review (staged, not connected to WebUI)
 
 This is a **standalone** overlay for the existing `code-agent` namespace, absent
 from `../kustomization.yaml` and the portfolio root. Both Deployments default to
-**zero replicas**. Do not `kubectl apply -k` this overlay before the reviewed PR
-is merged. The pinned pilot-6 broker image was built and imported locally on
-caos with the review code; runtime authorization/isolation still needs testing.
+**zero replicas** in git. After reviewed PR #35 merged, the overlay was applied
+to home MicroK8s and the two private workloads were manually scaled to one for
+isolated testing. The pinned pilot-6 image was verified on caos; repository-scoped
+authorization, denied cross-broker ingress, terminal DNS/public egress, and the
+curated snapshot's 45 Git blobs were tested. No new Open WebUI connection was
+created in this rollout. Do not enable one before effective admin-only access,
+retention and model data handling have been checked in the running WebUI.
 No new Kubernetes deployer, public
 auto-deploy, direct git push, Ingress, IngressRoute, Traefik prefix, NodePort or
 LoadBalancer is included. Existing portfolio terminal/broker stay unchanged.
@@ -35,7 +39,7 @@ Kubernetes API access. The hardened terminal image is built from `../Dockerfile`
 and pinned to its verified locally imported digest with `imagePullPolicy: Never`;
 the broker image is pinned to the locally imported pilot-6 review digest.
 
-## Release blockers / contract before applying anything
+## Access blockers / contract before connecting WebUI
 
 - Review and verify the broker's staged `REVIEW_REPOSITORY=infra` fail-closed mode;
   reject unsupported values, verify submitted base commit against the operator's
