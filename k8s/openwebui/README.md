@@ -138,6 +138,15 @@ Access policy observed after this upgrade: public sign-up is enabled, but new ac
 - Check `http://webui.home.server:30080/api/version` and `https://chat.reyops.com/`.
 - Sign in and confirm existing chats, exactly four model aliases, a real web search, and a tool call through the enabled global integration. The tools proxy's OpenAPI spec is available **inside the cluster** at `http://openwebui-tools.default.svc.cluster.local:8000/openapi.json`.
 
+After a home-server reboot, Open WebUI can briefly exit while CoreDNS/PostgreSQL
+recover (`Temporary failure in name resolution` for the database). It then
+downloads the embedding-model cache into its unmounted `/app/backend/data`
+again. The pod has no ready endpoint during this work, so both ingress URLs may
+return `503` for several minutes. Check CoreDNS and Postgres readiness and
+`kubectl logs deployment/openwebui -n default`; wait for the pod to be `1/1`,
+then allow Traefik a few seconds to observe the new endpoint before diagnosing
+an ingress failure. Repeated rollout restarts discard the in-progress cache.
+
 ### Rollback after a schema migration
 
 Changing the image back is insufficient if the new version migrated PostgreSQL. For the v0.6.43 → v0.11.4 update, the verified private backups are in `~/.local/share/openwebui-backups/` on the operator's machine (`openwebui-pre-v0.11.4-20260927.dump` and `openwebui-data-pre-v0.11.4-20260927.tar`; **never** add these to git). The local `pg_restore` may be older than the server's dump format; use the PostgreSQL container's `pg_restore` and stream the archive into it. From the repository root with `kubectl` pointing at `microk8s`:
