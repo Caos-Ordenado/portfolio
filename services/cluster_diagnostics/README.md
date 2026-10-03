@@ -27,6 +27,10 @@ the portfolio terminal could publish log-derived text in a public PR or send it
 over its existing public HTTPS egress; this bridge does not guarantee otherwise.
 Event summaries omit free-text messages; raw pod logs are returned unchanged,
 capped per request.
+When the owner explicitly requests logs in chat, both terminal agents may
+display those returned lines verbatim, even if they contain sensitive values.
+This permission is for the owner's chat, not a public PR or diagnostic bearer
+key disclosure. The service's per-request bounds remain in force.
 
 ## Live status after PR #39/#40
 
