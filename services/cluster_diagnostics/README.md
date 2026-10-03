@@ -28,6 +28,32 @@ over its existing public HTTPS egress; this bridge does not guarantee otherwise.
 Event summaries omit free-text messages; raw pod logs are returned unchanged,
 capped per request.
 
+## Live status after PR #39/#40
+
+On home MicroK8s, diagnostics, `open-terminal`, `infra-terminal`, and their
+`code-agent-pr-broker` / `infra-pr-broker` Deployments were observed 1/1.
+Diagnostics uses image digest
+`sha256:589490b0a26f1a1914e494a34453edd078da218a2b16f5371c14c8284970e2b5`
+and TCP 8002 ClusterIP `10.152.183.59` (the IP may change if recreated).
+Only the two terminal Pods ingressed with separate keys; the diagnostics Pod
+alone called the Kubernetes API. CA-chain and API Service IP identity were
+validated with X.509 STRICT relaxed only for the home MicroK8s CA's missing
+keyUsage. Cross-namespace pod, event and metric summaries and Dozzle pod logs
+worked; RBAC denied Secrets, ConfigMaps, exec, proxy and writes. Live checks
+denied unrelated-pod ingress, unrelated/public diagnostics egress and terminal
+direct API access. No new public route was added.
+
+`/health` is liveness only; `/ready` actually queries the API. Check readiness,
+endpoint, image and negative RBAC permissions with the read-only commands in
+`../../k8s/code-agent/diagnostics/README.md`; they cannot independently prove
+bearer authentication or CNI isolation after a change. On readiness failure,
+check the API Service VIP and scoped policy/DNAT paths before changing network
+rules or TLS. The checked-in overlay intentionally specifies zero replicas
+while live is one: reapplying it scales diagnostics down. For a failed
+isolation check, stop using the bridge and follow the overlay rollback (scale
+diagnostics to zero, restore **both** terminal Deployments and policies).
+Do not print bearer keys or raw log responses while investigating.
+
 Run offline tests from this directory with `python3 -m pytest -q tests`.
 The image uses only Python's standard library and a digest-pinned Python base.
 Deployment, rollback, isolation and negative checks are in
