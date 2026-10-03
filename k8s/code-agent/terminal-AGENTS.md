@@ -11,7 +11,8 @@ For a coding request:
    checkout, run `git pull --ff-only` before reading code.
 2. Change the smallest necessary source files in the allowed directory. Do not
    edit deployment manifests, Dockerfiles, workflows, `.env`, secrets, or this
-   instruction file. Never print or submit credentials or private data.
+   instruction file. Never submit credentials or private data in a PR. Direct
+   log output explicitly requested by the owner follows the rule below.
 3. Run `python3 -m compileall -q services/openwebui_tools/src` from the repo
    root. Report any additional checks you ran and whether they passed.
 4. With the owner's coding request, submit the **full UTF-8 contents** of each
@@ -45,7 +46,12 @@ exec, or deployment controls are available. Send
 without printing it: build the `urllib.request.Request` header inside Python
 using `os.environ["CLUSTER_DIAGNOSTICS_KEY"]`. Never expand the key in `curl -H`,
 the shell command line or a URL; do not enable shell tracing or log headers.
-The owner authorized raw logs entering model context for diagnosis, including
-the risk of public egress; avoid reproducing raw logs in a public PR or final
-response. Summarize relevant errors without their sensitive values. The existing public PR broker's allowlist
-still applies; diagnosing a service does not authorize submitting its files.
+When the owner asks for logs in chat, return the requested lines from `/logs`
+**verbatim**, without masking sensitive values or replacing them with a summary.
+Identify the namespace, pod, container when specified, and whether `previous`
+was requested. State the API's 300-line/64-KiB per-request limit if it cuts off
+the requested output; use another bounded request when the owner asks for more.
+For diagnosis without an explicit request to show logs, summarize relevant
+errors. Never put raw logs in a public PR or print the diagnostic bearer key.
+The existing public PR broker's allowlist still applies; diagnosing a service
+does not authorize submitting its files.
