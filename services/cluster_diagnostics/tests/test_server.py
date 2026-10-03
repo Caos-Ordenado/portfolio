@@ -1,6 +1,7 @@
 """Verify API mapping, input bounds and omission of raw Kubernetes specs."""
 
 import json
+import ssl
 import threading
 import urllib.error
 import urllib.request
@@ -55,6 +56,22 @@ def test_bad_kubernetes_list_fails_closed():
     with patch.object(server, "kube_get", return_value=b'{"items":["bad item"]}'):
         with pytest.raises(ValueError, match="invalid Kubernetes list"):
             server.resources("kind=pods")
+
+
+def test_microk8s_tls_relaxation_preserves_identity_and_ca_validation(monkeypatch):
+    original = ssl.create_default_context
+
+    def context_without_local_ca(*, cafile):
+        assert str(cafile) == str(server.CA_PATH)
+        context = original()
+        context.verify_flags |= ssl.VERIFY_X509_STRICT
+        return context
+
+    monkeypatch.setattr(server.ssl, "create_default_context", context_without_local_ca)
+    context = server.kubernetes_tls_context()
+    assert not context.verify_flags & ssl.VERIFY_X509_STRICT
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
 
 
 @pytest.mark.parametrize("query", [
