@@ -32,7 +32,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: diagnostics
-          image: docker.io/library/cluster-diagnostics@sha256:bf7b60c7a703ebef1cbb9ee92fe0e0645e36c1160b0842a801348384891f28c2
+          image: docker.io/library/cluster-diagnostics@sha256:589490b0a26f1a1914e494a34453edd078da218a2b16f5371c14c8284970e2b5
           imagePullPolicy: Never
           env:
             - name: KUBERNETES_SERVICE_HOST

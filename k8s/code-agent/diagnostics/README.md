@@ -19,6 +19,10 @@ across namespaces and intentionally excludes Secrets and ConfigMaps.
    Kubernetes CA validation against the API Service IP without DNS, and
    `imagePullPolicy: Never` on the target node. Keep replicas at 0 until
    these checks pass.
+   Python 3.13 uses strict X.509 checks that reject the existing MicroK8s CA's
+   missing keyUsage; this service disables only `VERIFY_X509_STRICT` while
+   retaining CA and API service IP identity checks. Do not set `CERT_NONE` or
+   disable hostname validation to work around a different TLS error.
    Create `cluster-diagnostics-api-keys` out of git with independent random
    `PORTFOLIO_KEY` and `INFRA_KEY` values (64 hex characters each, no newline),
    supplied from operator-owned mode-0600 files. Verify the Secret exists by
@@ -71,9 +75,13 @@ or applying the parent. Verify no diagnostics endpoint or RBAC binding remains.
   `kubectl get clusterrole,clusterrolebinding code-agent-cluster-diagnostics`;
   verify no diagnostic Pod before deliberate activation and no public Service.
 - `kubectl auth can-i --as=system:serviceaccount:code-agent:cluster-diagnostics
-  list pods --all-namespaces` should be yes; `get pods/log` should be yes.
+  list pods --all-namespaces` should be yes; `get pods --subresource=log` should
+  be yes.
   `get secrets --all-namespaces`, `get configmaps --all-namespaces`,
-  `create pods`, `create pods/exec`, and `get pods/proxy` should all be no.
+  `create pods`, `create pods --subresource=exec`, and
+  `get pods --subresource=proxy` should all be no. Always pass `--subresource`
+  explicitly; `kubectl auth can-i get pods/proxy` can be parsed as a resource
+  name instead of a subresource check and give a misleading result.
 - From both allowed terminals test `http://$CLUSTER_DIAGNOSTICS_SERVICE_HOST:8002/health`
   (the open terminal may use the Service ClusterIP if its Service link is absent).
   From any other pod, test port 8002 is blocked. From diagnostics confirm the

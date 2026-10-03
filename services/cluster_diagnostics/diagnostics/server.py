@@ -56,6 +56,14 @@ def params(query: str, permitted: set[str]) -> dict[str, str]:
     return {key: values[0] for key, values in data.items()}
 
 
+def kubernetes_tls_context() -> ssl.SSLContext:
+    context = ssl.create_default_context(cafile=str(CA_PATH))
+    # Home MicroK8s CA lacks X.509 keyUsage; Python 3.13 enables STRICT by
+    # default. Keep CA-chain and IP/hostname validation, only relax that flag.
+    context.verify_flags &= ~ssl.VERIFY_X509_STRICT
+    return context
+
+
 def kube_get(path: str) -> bytes:
     host = os.environ["KUBERNETES_SERVICE_HOST"]
     port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
@@ -66,7 +74,7 @@ def kube_get(path: str) -> bytes:
         "Authorization": "Bearer " + TOKEN_PATH.read_text().strip(),
         "Accept": "application/json",
     })
-    with urllib.request.urlopen(request, context=ssl.create_default_context(cafile=str(CA_PATH)), timeout=10) as response:
+    with urllib.request.urlopen(request, context=kubernetes_tls_context(), timeout=10) as response:
         data = response.read(4 * 1024 * 1024 + 1)
     if len(data) > 4 * 1024 * 1024:
         raise ValueError("Kubernetes response too large")
