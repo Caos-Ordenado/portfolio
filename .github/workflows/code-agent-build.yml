@@ -1,0 +1,122 @@
+name: code-agent trusted images
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+env:
+  # Only a reviewed workflow change may advance trusted build inputs.
+  TRUSTED_BUILD_BASE: 00c68ea0d08263fcb860aa58defe2fef8f0c2c3c
+concurrency:
+  group: code-agent-trusted-images
+  cancel-in-progress: false
+jobs:
+  gate:
+    if: github.repository == 'Caos-Ordenado/portfolio'
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.paths.outputs.build }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: paths
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import subprocess
+          before, after = os.environ['BEFORE'], os.environ['AFTER']
+          if before == '0' * 40 or len(before) != 40 or len(after) != 40:
+              raise SystemExit('unknown push base')
+          if subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() != after:
+              raise SystemExit('wrong checkout')
+          subprocess.run(['git', 'merge-base', '--is-ancestor', before, after], check=True)
+          paths = [p for p in subprocess.check_output(['git', 'diff', '--no-renames', '--name-only', '-z', before, after]).split(b'\0') if p]
+          allowed = (b'services/openwebui_tools/src/', b'services/code_agent_pr_broker/broker/', b'services/code_agent_pr_broker/tests/', b'services/cluster_diagnostics/diagnostics/', b'services/cluster_diagnostics/tests/', b'k8s/code-agent/terminal-AGENTS.md', b'k8s/code-agent/infra-review/infra-terminal-AGENTS.md')
+          # All images share one run/status identity. Never publish partial releases.
+          if paths and all(any(p.startswith(a) if a.endswith(b'/') else p == a for a in allowed) for p in paths):
+              with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+                  output.write('build=true\n')
+          PY
+  verify:
+    needs: gate
+    if: needs.gate.outputs.build == 'true' && github.repository == 'Caos-Ordenado/portfolio' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify service tests at the exact pushed commit
+        run: |
+          git show "$TRUSTED_BUILD_BASE:services/code_agent_pr_broker/requirements.lock" > "$RUNNER_TEMP/trusted-broker-requirements.lock"
+          python3 -m pip install --require-hashes -r "$RUNNER_TEMP/trusted-broker-requirements.lock"
+          python3 -m pip install pytest==8.3.4 pytest-asyncio==0.25.3
+          python3 -m compileall -q services/code_agent_pr_broker/broker services/cluster_diagnostics/diagnostics
+          PYTHONPATH=services/code_agent_pr_broker:services/cluster_diagnostics python3 -m pytest -q services/code_agent_pr_broker/tests services/cluster_diagnostics/tests
+  build:
+    needs: [gate, verify]
+    if: needs.gate.outputs.build == 'true' && needs.verify.result == 'success' && github.repository == 'Caos-Ordenado/portfolio' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      statuses: write
+    steps:
+      # Fresh runner: bot-controlled tests cannot persist hooks into publishing.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build tracked source and publish matching commit digests
+        env:
+          COMMIT: ${{ github.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$COMMIT"
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          export DOCKER_CONFIG="$tmp/auth"
+          mkdir -m 700 "$DOCKER_CONFIG"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
+          for entry in 'code_agent_pr_broker broker code-agent-pr-broker' 'cluster_diagnostics diagnostics cluster-diagnostics' 'terminal terminal open-terminal-hardened'; do
+            read -r source name image <<< "$entry"
+            mkdir -p "$tmp/$name"
+            if test "$source" = terminal; then
+              git archive "$TRUSTED_BUILD_BASE" -- k8s/code-agent/Dockerfile | tar -xf - -C "$tmp/$name"
+              git archive HEAD -- k8s/code-agent/terminal-AGENTS.md k8s/code-agent/infra-review/infra-terminal-AGENTS.md | tar -xf - -C "$tmp/$name"
+              context="$tmp/$name/k8s/code-agent"
+            else
+              if test "$name" = broker; then
+                git archive "$TRUSTED_BUILD_BASE" -- "services/$source/Dockerfile" "services/$source/requirements.lock" | tar -xf - -C "$tmp/$name"
+                git archive HEAD -- "services/$source/$name" | tar -xf - -C "$tmp/$name"
+              else
+                git archive "$TRUSTED_BUILD_BASE" -- "services/$source/Dockerfile" | tar -xf - -C "$tmp/$name"
+                git archive HEAD -- "services/$source/$name" | tar -xf - -C "$tmp/$name"
+              fi
+              context="$tmp/$name/services/$source"
+            fi
+            docker buildx build --platform linux/amd64 --file "$context/Dockerfile" --tag "ghcr.io/caos-ordenado/$image:git-$COMMIT" --push --metadata-file "$tmp/$name.json" "$context"
+            digest="$(python3 - "$tmp/$name.json" <<'PY'
+          import json, re, sys
+          value = json.load(open(sys.argv[1], encoding='utf-8'))['containerimage.digest']
+          if not re.fullmatch(r'sha256:[0-9a-f]{64}', value):
+              raise SystemExit('bad digest')
+          print(value)
+          PY
+            )"
+            mkdir -m 700 "$tmp/anonymous-$name"
+            DOCKER_CONFIG="$tmp/anonymous-$name" docker manifest inspect "ghcr.io/caos-ordenado/$image@$digest" >/dev/null
+            # Status is only posted after the anonymous digest probe succeeds.
+            gh api --method POST "repos/Caos-Ordenado/portfolio/statuses/$COMMIT" -f state=success -f "context=code-agent-$image-image" -f "description=$digest" -f "target_url=https://github.com/Caos-Ordenado/portfolio/actions/runs/$GITHUB_RUN_ID" >/dev/null
+          done

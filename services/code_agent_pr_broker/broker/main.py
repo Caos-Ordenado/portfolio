@@ -30,6 +30,18 @@ MAX_BODY = 256 * 1024
 MAX_BYTES = 64 * 1024
 SHA = re.compile(r"[a-fA-F0-9]{40}")
 REVIEW_BRANCH_PREFIX = "agent/review/"
+SELF_BRANCH_PREFIX = "agent/self-update/"
+SELF_SOURCE = (
+    "services/openwebui_tools/src/",
+    "services/code_agent_pr_broker/broker/",
+    "services/cluster_diagnostics/diagnostics/",
+)
+SELF_TESTS = (
+    "services/openwebui_tools/tests/",
+    "services/code_agent_pr_broker/tests/",
+    "services/cluster_diagnostics/tests/",
+)
+SELF_DOCS = {"k8s/code-agent/terminal-AGENTS.md", "k8s/code-agent/infra-review/infra-terminal-AGENTS.md"}
 TEXT_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".vue", ".css", ".scss", ".html", ".json", ".md", ".yaml", ".yml", ".sh", ".svg"}
 PORTFOLIO_SOURCE = (
     "services/renderer/", "services/web_crawler/", "services/openwebui_tools/",
@@ -75,6 +87,19 @@ def allowed_review_path(repo: str, path: str) -> bool:
     return any(path.startswith(site + directory) for site in INFRA_SITES for directory in SITE_DIRS) and Path(name).suffix.lower() in TEXT_EXTENSIONS - {".py", ".sh", ".md", ".yaml", ".yml"}
 
 
+def allowed_self_path(path: str) -> bool:
+    """An exact, independent allowlist; never inherit review/legacy privileges."""
+    if not path or not path.isascii() or "\\" in path or any(ord(ch) < 32 or ord(ch) == 127 for ch in path):
+        return False
+    parts = path.split("/")
+    if any(not part or part in (".", "..") or part.startswith(".") or part.casefold() in DENIED_PARTS or SENSITIVE.search(part) for part in parts):
+        return False
+    if path in SELF_DOCS:
+        return True
+    return any(path.startswith(prefix) and len(path) > len(prefix) and path.endswith(".py")
+               and len(parts[-1]) > 3 for prefix in SELF_SOURCE + SELF_TESTS)
+
+
 class ReviewFile(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     path: str
@@ -106,6 +131,14 @@ class ReviewProposal(BaseModel):
             for f in self.files
         ):
             raise ValueError("invalid file content")
+        return self
+
+
+class SelfProposal(ReviewProposal):
+    @model_validator(mode="after")
+    def check_self_paths(self) -> "SelfProposal":
+        if any(not allowed_self_path(file.path) for file in self.files):
+            raise ValueError("self-update path not allowed")
         return self
 
 
@@ -287,7 +320,7 @@ class GitHub:
                 pr.get("state") == "open" and not pr.get("draft")
                 and isinstance(pr.get("user"), dict) and pr["user"].get("login") == BOT_LOGIN
                 and type(number) is int and number > 0
-                and isinstance(head.get("ref"), str) and head["ref"].startswith(BRANCH_PREFIX)
+                and isinstance(head.get("ref"), str) and head["ref"].startswith((BRANCH_PREFIX, SELF_BRANCH_PREFIX))
                 and base.get("ref") == "main"
                 and head_repo.get("full_name") == REPO == base_repo.get("full_name")
                 and head_repo.get("id") == base_repo.get("id")
@@ -296,8 +329,13 @@ class GitHub:
             files = await self.request_list(f"{root}/pulls/{number}/files?per_page=100", token)
             if not files or len(files) >= 100:
                 continue
+            self_update = head["ref"].startswith(SELF_BRANCH_PREFIX)
+            if self_update and (not isinstance(head.get("sha"), str) or not SHA.fullmatch(head["sha"])
+                                or not isinstance(base.get("sha"), str) or not SHA.fullmatch(base["sha"])
+                                or any(item.get("status") not in ("added", "modified") for item in files)):
+                continue
             if any(
-                not isinstance(path, str) or not path.startswith(PREFIX) or len(path) == len(PREFIX)
+                not isinstance(path, str) or (not allowed_self_path(path) if self_update else not path.startswith(PREFIX) or len(path) == len(PREFIX))
                 for item in files
                 for path in ([item.get("filename")] + ([item["previous_filename"]] if "previous_filename" in item else []))
             ):
@@ -308,7 +346,7 @@ class GitHub:
             latest_head_repo = latest_head.get("repo") if isinstance(latest_head.get("repo"), dict) else {}
             latest_base_repo = latest_base.get("repo") if isinstance(latest_base.get("repo"), dict) else {}
             if not (
-                latest.get("state") == "open" and latest.get("mergeable_state") == "clean"
+                latest.get("state") == "open" and latest.get("mergeable_state") == "clean" and not latest.get("draft")
                 and isinstance(latest.get("user"), dict) and latest["user"].get("login") == BOT_LOGIN
                 and latest_head.get("sha") == head.get("sha")
                 and latest_base.get("sha") == base.get("sha")
@@ -336,13 +374,22 @@ class GitHub:
             check_review_base(proposal, self.repository, proposal.expected_base_sha)
         return await self._create_pr(proposal, REVIEW_REPOS[self.repository], REVIEW_BRANCH_PREFIX, auto_merge=False)
 
-    async def _create_pr(self, proposal: Proposal | ReviewProposal, repo: str, branch_prefix: str, *, auto_merge: bool) -> dict[str, Any]:
+    async def create_self_proposal(self, proposal: SelfProposal) -> dict[str, Any]:
+        if self.repository != "portfolio" or review_repository() != "portfolio":
+            raise RuntimeError("self-updates unavailable in this deployment")
+        if any(not allowed_self_path(file.path) for file in proposal.files):
+            raise ValueError("self-update path not allowed")
+        return await self._create_pr(proposal, REPO, SELF_BRANCH_PREFIX, auto_merge=True)
+
+    async def _create_pr(self, proposal: Proposal | ReviewProposal | SelfProposal, repo: str, branch_prefix: str, *, auto_merge: bool) -> dict[str, Any]:
         token = await self.installation_token()
         root = f"/repos/{repo}"
         ref = await self.request("GET", f"{root}/git/ref/heads/main", token)
         base_sha = require_sha(ref.get("object", {}).get("sha") if isinstance(ref.get("object"), dict) else None)
-        if isinstance(proposal, ReviewProposal):
+        if isinstance(proposal, ReviewProposal) and not isinstance(proposal, SelfProposal):
             check_review_base(proposal, self.repository, base_sha)
+        elif isinstance(proposal, SelfProposal) and base_sha.lower() != proposal.expected_base_sha.lower():
+            raise StaleBaseError("main has changed")
         commit = await self.request("GET", f"{root}/git/commits/{base_sha}", token)
         tree_sha = require_sha(commit.get("tree", {}).get("sha") if isinstance(commit.get("tree"), dict) else None)
         tree = await self.request("GET", f"{root}/git/trees/{tree_sha}?recursive=1", token)
@@ -374,7 +421,11 @@ class GitHub:
         if isinstance(proposal, ReviewProposal):
             current = await self.request("GET", f"{root}/git/ref/heads/main", token)
             current_sha = require_sha(current.get("object", {}).get("sha") if isinstance(current.get("object"), dict) else None)
-            check_review_base(proposal, self.repository, current_sha)
+            if isinstance(proposal, SelfProposal):
+                if current_sha.lower() != proposal.expected_base_sha.lower():
+                    raise StaleBaseError("main has changed")
+            else:
+                check_review_base(proposal, self.repository, current_sha)
             if current_sha.lower() != base_sha.lower():
                 raise StaleBaseError("main has changed")
         new_entries = []
@@ -446,7 +497,7 @@ app = FastAPI(title="Code agent PR broker", lifespan=lifespan)
 
 @app.middleware("http")
 async def limit_body(request: Request, call_next: Any) -> Any:
-    if request.url.path in ("/proposals", "/review-proposals"):
+    if request.url.path in ("/proposals", "/review-proposals", "/self-proposals"):
         size = 0
         chunks = []
         async for chunk in request.stream():
@@ -499,4 +550,21 @@ async def review_proposals(proposal: ReviewProposal, request: Request) -> dict[s
         raise HTTPException(status_code=422, detail="invalid proposal") from None
     except (UpstreamError, RuntimeError, OSError, jwt.PyJWTError, asyncio.TimeoutError):
         logger.warning("review_proposal_creation_failed", exc_info=False)
+        raise HTTPException(status_code=502, detail="proposal could not be created") from None
+
+
+@app.post("/self-proposals")
+async def self_proposals(proposal: SelfProposal, request: Request) -> dict[str, Any]:
+    if review_repository() != "portfolio":
+        raise HTTPException(status_code=404, detail="not found")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0), follow_redirects=False) as client:
+            github = getattr(request.app.state, "github", None) or GitHub(client)
+            return await github.create_self_proposal(proposal)
+    except StaleBaseError:
+        raise HTTPException(status_code=409, detail="main has changed") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid proposal") from None
+    except (UpstreamError, RuntimeError, OSError, jwt.PyJWTError, asyncio.TimeoutError):
+        logger.warning("self_proposal_creation_failed", exc_info=False)
         raise HTTPException(status_code=502, detail="proposal could not be created") from None

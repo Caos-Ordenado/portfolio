@@ -3,8 +3,8 @@ import json
 import httpx
 import pytest
 
-from broker.main import (GitHub, Proposal, REPO, ReviewProposal, StaleBaseError,
-                         UpstreamError, allowed_review_path, app, git_blob_sha)
+from broker.main import (GitHub, Proposal, REPO, ReviewProposal, SelfProposal, StaleBaseError,
+                         UpstreamError, allowed_review_path, allowed_self_path, app, git_blob_sha)
 
 ROOT = f"/repos/{REPO}"
 BASE = "a" * 40
@@ -29,7 +29,50 @@ PATH = "services/openwebui_tools/src/example.py"
 
 def proposal(files=None, **kwargs):
     return Proposal(title="Change", body="Description", message="Update code",
-                    files=files if files is not None else [{"path": PATH, "content": "print(1)\n"}], **kwargs)
+                     files=files if files is not None else [{"path": PATH, "content": "print(1)\n"}], **kwargs)
+
+
+def self_proposal(path="services/code_agent_pr_broker/broker/main.py", content="print(1)\n", **kwargs):
+    return SelfProposal(**{**{"title": "Self update", "body": "Public change", "message": "Update broker",
+                            "expected_base_sha": BASE, "files": [{"path": path, "content": content}]}, **kwargs})
+
+
+@pytest.mark.parametrize("path,allowed", [
+    ("services/openwebui_tools/src/main.py", True),
+    ("services/code_agent_pr_broker/broker/main.py", True),
+    ("services/cluster_diagnostics/diagnostics/main.py", True),
+    ("services/code_agent_pr_broker/tests/test_broker.py", True),
+    ("k8s/code-agent/terminal-AGENTS.md", True),
+    ("k8s/code-agent/infra-review/infra-terminal-AGENTS.md", True),
+    ("k8s/code-agent/Dockerfile", False),  # arbitrary build commands are not safe to auto-merge
+    ("k8s/code-agent/deployment.yaml", False),
+    ("k8s/openwebui_tools/releaser.yaml", False),
+    (".github/workflows/release.yaml", False),
+    ("services/openwebui_tools_releaser/src/main.py", False),
+    ("services/renderer/src/main.py", False),
+    ("services/code_agent_pr_broker/broker/../tests/a.py", False),
+    ("services/code_agent_pr_broker/broker/.hidden.py", False),
+    ("services/code_agent_pr_broker/broker/a\\b.py", False),
+    ("services/code_agent_pr_broker/broker/a//b.py", False),
+    ("services/code_agent_pr_broker/broker/secrets/a.py", False),
+    ("services/code_agent_pr_broker/broker/auth.py", False),
+])
+def test_self_allowlist(path, allowed):
+    assert allowed_self_path(path) is allowed
+
+
+def test_self_validation_rejects_overrides_and_content():
+    payload = self_proposal().model_dump()
+    for key, value in [("repository", "Caos-Ordenado/infra"), ("ref", "main"), ("url", "https://example.com")]:
+        with pytest.raises(ValueError):
+            SelfProposal.model_validate({**payload, key: value})
+    for content in ("\x00", "\ud800", "-----BEGIN PRIVATE KEY-----\nkey", "x" * 65537):
+        with pytest.raises(ValueError):
+            self_proposal(content=content)
+    with pytest.raises(ValueError):
+        self_proposal(expected_base_sha="invalid")
+    with pytest.raises(ValueError):
+        SelfProposal.model_validate({**payload, "files": payload["files"] * 2})
 
 
 @pytest.mark.parametrize("path", [
@@ -203,6 +246,116 @@ async def test_failed_auto_merge_keeps_published_pr(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("entries,content,error", [
+    ([], "print(1)\n", None),
+    ([{"path": "services/code_agent_pr_broker/broker", "type": "blob", "mode": "120000"}], "new", UpstreamError),
+    ([{"path": "services/code_agent_pr_broker/broker/main.py", "type": "blob", "mode": "120000"}], "new", UpstreamError),
+    ([{"path": "services/code_agent_pr_broker/broker/main.py", "type": "blob", "mode": "100644",
+       "sha": git_blob_sha(b"same")}], "same", ValueError),
+])
+async def test_self_creation_auto_merge_and_guards(monkeypatch, entries, content, error):
+    transport, calls = mock_api(entries)
+    async with httpx.AsyncClient(transport=transport) as client:
+        github = GitHub(client)
+
+        async def token():
+            return "test-token"
+
+        monkeypatch.setattr(github, "installation_token", token)
+        if error:
+            with pytest.raises(error):
+                await github.create_self_proposal(self_proposal(content=content))
+        else:
+            result = await github.create_self_proposal(self_proposal(content=content))
+            assert result["branch"].startswith("agent/self-update/")
+            assert result["auto_merge_queued"] is True
+            assert any(path == "/graphql" for _, path, _ in calls)
+        if error:
+            assert all(method == "GET" for method, _, _ in calls)
+    assert all(path.startswith(ROOT + "/") or path == "/graphql" for _, path, _ in calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ref_shas", [("f" * 40,), (BASE, "f" * 40)])
+async def test_self_stale_base_blocks_writes(monkeypatch, ref_shas):
+    calls = []
+    ref_reads = 0
+
+    def respond(req):
+        nonlocal ref_reads
+        calls.append(req.method)
+        if req.url.path.endswith("/git/ref/heads/main"):
+            sha = ref_shas[min(ref_reads, len(ref_shas) - 1)]
+            ref_reads += 1
+            return httpx.Response(200, json={"object": {"sha": sha}})
+        if req.url.path.endswith(f"/git/commits/{BASE}"):
+            return httpx.Response(200, json={"tree": {"sha": TREE}})
+        if req.url.path.endswith(f"/git/trees/{TREE}"):
+            return httpx.Response(200, json={"truncated": False, "tree": []})
+        pytest.fail("unexpected write")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        github = GitHub(client)
+
+        async def token():
+            return "test-token"
+
+        monkeypatch.setattr(github, "installation_token", token)
+        with pytest.raises(StaleBaseError):
+            await github.create_self_proposal(self_proposal())
+    assert all(method == "GET" for method in calls)
+
+
+@pytest.mark.asyncio
+async def test_self_auto_merge_failure_preserves_pr(monkeypatch):
+    transport, calls = mock_api([], fail_auto_merge=True)
+    async with httpx.AsyncClient(transport=transport) as client:
+        github = GitHub(client)
+
+        async def token():
+            return "test-token"
+
+        monkeypatch.setattr(github, "installation_token", token)
+        result = await github.create_self_proposal(self_proposal())
+    assert result["auto_merge_queued"] is False
+    assert not any(method == "DELETE" for method, _, _ in calls)
+
+
+@pytest.mark.asyncio
+async def test_self_endpoint_portfolio_only_and_bounded(monkeypatch):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        payload = self_proposal().model_dump()
+        assert (await client.post("/self-proposals", json={**payload, "repository": REPO})).status_code == 422
+        assert (await client.post("/self-proposals", json={**payload, "files": [{"path": "k8s/code-agent/Dockerfile", "content": "RUN true"}]})).status_code == 422
+        assert (await client.post("/self-proposals", json={k: v for k, v in payload.items() if k != "expected_base_sha"})).status_code == 422
+        assert (await client.post("/self-proposals", content=b"x" * (256 * 1024 + 1))).status_code == 413
+        monkeypatch.setenv("REVIEW_REPOSITORY", "infra")
+        assert (await client.post("/self-proposals", json=payload)).status_code == 404
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(RuntimeError):
+            await GitHub(client, "infra").create_self_proposal(self_proposal())
+
+
+@pytest.mark.asyncio
+async def test_self_endpoint_stale_returns_conflict(monkeypatch):
+    transport, calls = mock_api([])
+    async with httpx.AsyncClient(transport=transport) as upstream:
+        github = GitHub(upstream)
+
+        async def token():
+            return "test-token"
+
+        monkeypatch.setattr(github, "installation_token", token)
+        app.state.github = github
+        try:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                assert (await client.post("/self-proposals", json=self_proposal(expected_base_sha="f" * 40).model_dump())).status_code == 409
+        finally:
+            del app.state.github
+    assert len(calls) == 1 and calls[0][0] == "GET"
+
+
+@pytest.mark.asyncio
 async def test_ready_bot_pr_requeues_only_allowlisted_source(monkeypatch):
     for path, expected in [(PATH, True), ("k8s/code-agent/deployment.yaml", False)]:
         transport, calls = mock_api([], listed_path=path)
@@ -215,6 +368,56 @@ async def test_ready_bot_pr_requeues_only_allowlisted_source(monkeypatch):
             monkeypatch.setattr(github, "installation_token", token)
             await github.retry_ready_auto_merges()
         assert any(method == "POST" and url == "/graphql" for method, url, _ in calls) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("branch,files,override,expected", [
+    ("agent/self-update/test", [{"filename": "services/code_agent_pr_broker/broker/main.py", "status": "modified"}], {}, True),
+    ("agent/self-update/test", [{"filename": "k8s/code-agent/terminal-AGENTS.md", "status": "modified"}], {}, True),
+    ("agent/self-update/test", [{"filename": PATH, "status": "modified"},
+                                {"filename": "k8s/code-agent/deployment.yaml", "status": "modified"}], {}, False),
+    ("agent/self-update/test", [{"filename": PATH, "previous_filename": ".github/workflows/a.yaml", "status": "modified"}], {}, False),
+    ("agent/self-update/test", [{"filename": PATH, "status": "removed"}], {}, False),
+    ("agent/self-update/test", [{"filename": PATH, "status": "modified"}], {"user": {"login": "other"}}, False),
+    ("agent/self-update/test", [{"filename": PATH, "status": "modified"}], {"head": {"sha": "e" * 40}}, False),
+    ("agent/self-update/test", [{"filename": PATH, "status": "modified"}], {"base": {"sha": "e" * 40}}, False),
+    ("agent/self-update/test", [{"filename": PATH, "status": "modified"}], {"draft": True}, False),
+    ("agent/review/test", [{"filename": PATH, "status": "modified"}], {}, False),
+    ("agent/openwebui-tools/test", [{"filename": "services/code_agent_pr_broker/broker/main.py", "status": "modified"}], {}, False),
+])
+async def test_poller_self_scope_and_fresh_state(monkeypatch, branch, files, override, expected):
+    pr = {"state": "open", "draft": False, "number": 1, "node_id": "PR_kwTest",
+          "user": {"login": "home-lab-terminal-app[bot]"},
+          "head": {"ref": branch, "sha": "f" * 40, "repo": {"id": 1, "full_name": REPO}},
+          "base": {"ref": "main", "sha": BASE, "repo": {"id": 1, "full_name": REPO}}}
+    latest = {**pr, "mergeable_state": "clean", **override}
+    if "head" in override:
+        latest["head"] = {**pr["head"], **override["head"]}
+    if "base" in override:
+        latest["base"] = {**pr["base"], **override["base"]}
+    queued = []
+    async with httpx.AsyncClient() as client:
+        github = GitHub(client)
+
+        async def token():
+            return "test-token"
+
+        async def listing(path, _token):
+            return [pr] if "/pulls?" in path else files
+
+        async def detail(_method, _path, _token):
+            return latest
+
+        async def queue(_token, _node_id):
+            queued.append(True)
+            return True
+
+        monkeypatch.setattr(github, "installation_token", token)
+        monkeypatch.setattr(github, "request_list", listing)
+        monkeypatch.setattr(github, "request", detail)
+        monkeypatch.setattr(github, "request_auto_merge", queue)
+        await github.retry_ready_auto_merges()
+    assert bool(queued) is expected
 
 
 @pytest.mark.asyncio

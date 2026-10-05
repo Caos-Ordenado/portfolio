@@ -83,6 +83,11 @@ spec:
           volumeMounts:
             - name: home
               mountPath: /home/user
+            # Bootstrap before creating Pods; no writes to the PVC's AGENTS.md.
+            - name: terminal-instructions
+              mountPath: /home/user/AGENTS.md
+              subPath: AGENTS.md
+              readOnly: true
             - name: snapshot-sha
               mountPath: /run/review-snapshot
               readOnly: true
@@ -96,3 +101,9 @@ spec:
         - name: home
           persistentVolumeClaim:
             claimName: infra-terminal-home
+        - name: terminal-instructions
+          configMap:
+            name: infra-terminal-agents
+            items:
+              - key: AGENTS.md
+                path: AGENTS.md
