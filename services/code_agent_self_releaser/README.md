@@ -36,6 +36,14 @@ refuses skipped, pending, failed, stale or mismatched runs/statuses. GHCR images
 must be publicly anonymously readable. Existing openwebui-tools workflow is
 independent and unchanged. CI workflow changes must remain owner-controlled.
 
+A mixed-path main push legitimately skips `verify` and `build`; the controller
+reports `no_eligible_build` and completes without touching Deployments or
+ConfigMaps. The first suspended one-shot smoke Job on the original controller
+image returned `missing_successful_build` on exactly such a push; the corrected
+image digest in `self-releaser.yaml` treats a **skipped** build as no release,
+while a missing/failed build remains an error. Repeat the smoke after updating
+the suspended CronJob; do not unsuspend based on the failed Job.
+
 From `portfolio/`: run `python3 -m pytest -q services/code_agent_self_releaser/tests`,
 `actionlint .github/workflows/code-agent-{pr,build}.yml`,
 `kubectl kustomize k8s/code-agent` (the new overlay must NOT appear), and

@@ -60,6 +60,25 @@ def test_stale_and_failed_runs_do_not_release():
         releaser.candidate(Gh({**base, "per_page=1": {"total_count": 1, "workflow_runs": [run]}}))
 
 
+def test_skipped_build_from_mixed_path_push_is_not_a_release():
+    sha = "a" * 40
+    run = {"id": 17, "head_sha": sha, "head_branch": "main", "event": "push",
+           "status": "completed", "conclusion": "success"}
+    responses = {
+        "/git/ref/heads/main": {"ref": "refs/heads/main", "object": {"type": "commit", "sha": sha}},
+        "per_page=1": {"total_count": 1, "workflow_runs": [run]},
+        "per_page=100": {"total_count": 3, "jobs": [
+            {"name": "gate", "status": "completed", "conclusion": "success"},
+            {"name": "verify", "status": "completed", "conclusion": "skipped"},
+            {"name": "build", "status": "completed", "conclusion": "skipped"},
+        ]},
+    }
+    assert releaser.candidate(Gh(responses)) is None
+    responses["per_page=100"]["jobs"][2]["conclusion"] = "failure"
+    with pytest.raises(releaser.ReleaseError, match="missing_successful_build"):
+        releaser.candidate(Gh(responses))
+
+
 def test_status_requires_matching_run_and_bot():
     sha = "a" * 40
     item = {"context": "code-agent-cluster-diagnostics-image", "state": "success", "creator": {"login": "github-actions[bot]"},

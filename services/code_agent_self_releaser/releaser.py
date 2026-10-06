@@ -103,7 +103,11 @@ def candidate(transport):
     if not isinstance(jobs, dict) or type(jobs.get("total_count")) is not int or not isinstance(jobs.get("jobs"), list) or jobs["total_count"] != len(jobs["jobs"]):
         raise ReleaseError("invalid_jobs")
     builds = [j for j in jobs["jobs"] if isinstance(j, dict) and j.get("name") == "build"]
-    if len(builds) != 1 or builds[0].get("status") != "completed" or builds[0].get("conclusion") != "success":
+    if len(builds) != 1:
+        raise ReleaseError("missing_successful_build")
+    if builds[0].get("status") == "completed" and builds[0].get("conclusion") == "skipped":
+        return None  # The trusted path gate deliberately found no eligible build.
+    if builds[0].get("status") != "completed" or builds[0].get("conclusion") != "success":
         raise ReleaseError("missing_successful_build")
     return run["id"], sha
 
