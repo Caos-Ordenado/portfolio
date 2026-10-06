@@ -1,4 +1,4 @@
-"""Restricted GitHub App PR broker. Do not expose this service to the public edge."""
+"""Internal GitHub App PR broker for reviewed proposals and scoped self-updates."""
 
 import asyncio
 import base64
