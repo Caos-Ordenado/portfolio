@@ -31,9 +31,9 @@ spec:
           type: RuntimeDefault
       containers:
         - name: pr-broker
-          # Reviewed local build from the locked broker image, imported on caos.
-          image: docker.io/library/code-agent-pr-broker@sha256:44a23d8e54d53d2d0284ee7ad6f8c0c15b3588ff8e846075098fa473cf569f0e
-          imagePullPolicy: Never
+          # Hosted build of the reviewed main commit, verified anonymously by digest.
+          image: ghcr.io/caos-ordenado/code-agent-pr-broker@sha256:9e01e14e7530f476ae2ef7f863b4677e4cf038d67ac3601764461f869f830163
+          imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
