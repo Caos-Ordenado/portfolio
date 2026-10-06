@@ -82,7 +82,19 @@ spec:
           volumeMounts:
             - name: home
               mountPath: /home/user
+            # Bootstrapped separately before applying this Deployment. subPath
+            # leaves the PVC's original AGENTS.md intact for mount-free rollback.
+            - name: terminal-instructions
+              mountPath: /home/user/AGENTS.md
+              subPath: AGENTS.md
+              readOnly: true
       volumes:
         - name: home
           persistentVolumeClaim:
             claimName: open-terminal-home
+        - name: terminal-instructions
+          configMap:
+            name: open-terminal-agents
+            items:
+              - key: AGENTS.md
+                path: AGENTS.md

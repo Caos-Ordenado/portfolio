@@ -1,0 +1,145 @@
+# Standalone, opt-in overlay. NOT included in any kustomization. The image was
+# built/imported locally; CronJob remains suspended until a live rollback drill.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: code-agent-self-releaser
+  namespace: code-agent
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: code-agent-self-releaser
+  namespace: code-agent
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [code-agent-pr-broker, cluster-diagnostics, open-terminal, infra-terminal]
+    verbs: [get, patch]
+  # Non-secret, operator-bootstrapped terminal instructions only. No create,
+  # delete, list, watch, or access to any other ConfigMap or Secret.
+  - apiGroups: ['']
+    resources: [configmaps]
+    resourceNames: [open-terminal-agents, infra-terminal-agents]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: code-agent-self-releaser
+  namespace: code-agent
+subjects:
+  - kind: ServiceAccount
+    name: code-agent-self-releaser
+    namespace: code-agent
+roleRef:
+  kind: Role
+  name: code-agent-self-releaser
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: code-agent-self-releaser
+  namespace: code-agent
+  labels:
+    app: code-agent-self-releaser
+    tier: deployment
+spec:
+  schedule: '*/10 * * * *'
+  concurrencyPolicy: Forbid
+  suspend: true
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 1800
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: code-agent-self-releaser
+            tier: deployment
+        spec:
+          serviceAccountName: code-agent-self-releaser
+          automountServiceAccountToken: true
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: releaser
+              image: docker.io/library/code-agent-self-releaser@sha256:79c59736639eadd734850480692b3cf176aa7e0cce61da1161f1d3332e220d42
+              imagePullPolicy: Never
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: [ALL]
+              env:
+                - name: PYTHONDONTWRITEBYTECODE
+                  value: '1'
+                - name: KUBERNETES_SERVICE_HOST
+                  value: '10.152.183.1'
+                - name: KUBERNETES_SERVICE_PORT
+                  value: '443'
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 192Mi
+---
+# Cluster-internal only: no Service, ingress or Tailscale route. Vanilla
+# NetworkPolicy cannot restrict public HTTPS by FQDN; runtime pins hosts/paths.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: code-agent-self-releaser
+  namespace: code-agent
+spec:
+  podSelector:
+    matchLabels:
+      app: code-agent-self-releaser
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.0.2.0/24, 192.168.0.0/16, 198.18.0.0/15, 198.51.100.0/24, 203.0.113.0/24, 224.0.0.0/4, 240.0.0.0/4]
+      ports:
+        - protocol: TCP
+          port: 443
+    - to:
+        - ipBlock:
+            cidr: 10.152.183.1/32
+      ports:
+        - protocol: TCP
+          port: 443
+    # Home MicroK8s Service DNAT observed at 192.168.68.6:16443.
+    - to:
+        - ipBlock:
+            cidr: 192.168.68.6/32
+      ports:
+        - protocol: TCP
+          port: 16443

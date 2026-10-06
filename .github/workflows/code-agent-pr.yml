@@ -1,0 +1,45 @@
+name: code-agent trusted PR checks
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+env:
+  # Only a reviewed workflow change may advance trusted build inputs.
+  TRUSTED_BUILD_BASE: 00c68ea0d08263fcb860aa58defe2fef8f0c2c3c
+jobs:
+  self-checks:
+    if: github.repository == 'Caos-Ordenado/portfolio'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check broker and diagnostics
+        run: |
+          git show "$TRUSTED_BUILD_BASE:services/code_agent_pr_broker/requirements.lock" > "$RUNNER_TEMP/trusted-broker-requirements.lock"
+          python3 -m pip install --require-hashes -r "$RUNNER_TEMP/trusted-broker-requirements.lock"
+          python3 -m pip install pytest==8.3.4 pytest-asyncio==0.25.3
+          python3 -m compileall -q services/code_agent_pr_broker/broker services/cluster_diagnostics/diagnostics
+          PYTHONPATH=services/code_agent_pr_broker:services/cluster_diagnostics python3 -m pytest -q services/code_agent_pr_broker/tests services/cluster_diagnostics/tests
+      - name: Build reviewed tracked contexts (no workspace secrets)
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          for entry in 'code_agent_pr_broker broker' 'cluster_diagnostics diagnostics'; do
+            read -r service name <<< "$entry"
+            mkdir -p "$tmp/$name"
+            paths=("services/$service/Dockerfile")
+            if test "$name" = broker; then paths+=("services/$service/requirements.lock"); fi
+            git archive "$TRUSTED_BUILD_BASE" -- "${paths[@]}" | tar -xf - -C "$tmp/$name"
+            git archive HEAD -- "services/$service/$name" | tar -xf - -C "$tmp/$name"
+            docker build --file "$tmp/$name/services/$service/Dockerfile" --tag "code-agent-$name:pr" "$tmp/$name/services/$service"
+          done
+          mkdir -p "$tmp/terminal"
+          git archive "$TRUSTED_BUILD_BASE" -- k8s/code-agent/Dockerfile | tar -xf - -C "$tmp/terminal"
+          git archive HEAD -- k8s/code-agent/terminal-AGENTS.md k8s/code-agent/infra-review/infra-terminal-AGENTS.md | tar -xf - -C "$tmp/terminal"
+          docker build --file "$tmp/terminal/k8s/code-agent/Dockerfile" --tag code-agent-terminal:pr "$tmp/terminal/k8s/code-agent"
