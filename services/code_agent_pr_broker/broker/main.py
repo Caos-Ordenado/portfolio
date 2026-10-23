@@ -26,6 +26,8 @@ REVIEW_REPOS = {"portfolio": REPO, "infra": "Caos-Ordenado/infra"}
 PREFIX = "services/openwebui_tools/src/"
 BRANCH_PREFIX = "agent/openwebui-tools/"
 BOT_LOGIN = "home-lab-terminal-app[bot]"
+SELF_CHECK_APP_ID = 15368
+SELF_CHECK_NAMES = {"checks", "self-checks"}
 MAX_BODY = 256 * 1024
 MAX_BYTES = 64 * 1024
 SHA = re.compile(r"[a-fA-F0-9]{40}")
@@ -289,6 +291,28 @@ class GitHub:
             logger.warning("auto_merge_not_queued")
             return False
 
+    async def merge_ready_self_pr(self, token: str, number: int, head_sha: str, base_sha: str) -> None:
+        root = f"/repos/{REPO}"
+        checks = await self.request("GET", f"{root}/commits/{head_sha}/check-runs?per_page=100", token)
+        runs = checks.get("check_runs")
+        if (type(checks.get("total_count")) is not int or checks["total_count"] != 2
+                or not isinstance(runs, list) or len(runs) != 2
+                or {run.get("name") for run in runs if isinstance(run, dict)} != SELF_CHECK_NAMES
+                or any(not isinstance(run, dict) or run.get("status") != "completed"
+                       or run.get("conclusion") != "success" or run.get("head_sha") != head_sha
+                       or not isinstance(run.get("app"), dict)
+                       or type(run["app"].get("id")) is not int or run["app"]["id"] != SELF_CHECK_APP_ID
+                       for run in runs)):
+            return
+        ref = await self.request("GET", f"{root}/git/ref/heads/main", token)
+        if not isinstance(ref.get("object"), dict) or ref["object"].get("sha") != base_sha:
+            return
+        result = await self.request("PUT", f"{root}/pulls/{number}/merge", token,
+                                    {"sha": head_sha, "merge_method": "squash"})
+        if result.get("merged") is not True:
+            raise UpstreamError("GitHub merge not confirmed")
+        logger.info("self_pr_merged=%s", number)
+
     async def retry_ready_auto_merges(self) -> None:
         """Re-request auto-merge once GitHub reports all protected gates clean."""
         if self.repository != "portfolio" or review_repository() != "portfolio":
@@ -330,7 +354,8 @@ class GitHub:
             if not files or len(files) >= 100:
                 continue
             self_update = head["ref"].startswith(SELF_BRANCH_PREFIX)
-            if self_update and (not isinstance(head.get("sha"), str) or not SHA.fullmatch(head["sha"])
+            if self_update and (type(head_repo.get("id")) is not int or head_repo["id"] <= 0
+                                or not isinstance(head.get("sha"), str) or not SHA.fullmatch(head["sha"])
                                 or not isinstance(base.get("sha"), str) or not SHA.fullmatch(base["sha"])
                                 or any(item.get("status") not in ("added", "modified") for item in files)):
                 continue
@@ -346,7 +371,9 @@ class GitHub:
             latest_head_repo = latest_head.get("repo") if isinstance(latest_head.get("repo"), dict) else {}
             latest_base_repo = latest_base.get("repo") if isinstance(latest_base.get("repo"), dict) else {}
             if not (
-                latest.get("state") == "open" and latest.get("mergeable_state") == "clean" and not latest.get("draft")
+                latest.get("state") == "open"
+                and latest.get("mergeable_state") in (("clean", "blocked") if self_update else ("clean",))
+                and not latest.get("draft")
                 and isinstance(latest.get("user"), dict) and latest["user"].get("login") == BOT_LOGIN
                 and latest_head.get("sha") == head.get("sha")
                 and latest_base.get("sha") == base.get("sha")
@@ -354,9 +381,12 @@ class GitHub:
                 and latest_base.get("ref") == "main"
                 and latest_head_repo.get("full_name") == REPO == latest_base_repo.get("full_name")
                 and latest_head_repo.get("id") == latest_base_repo.get("id")
+                and (not self_update or latest_head_repo.get("id") == head_repo["id"])
             ):
                 continue
-            if await self.request_auto_merge(token, latest.get("node_id")):
+            if self_update:
+                await self.merge_ready_self_pr(token, number, head["sha"], base["sha"])
+            elif await self.request_auto_merge(token, latest.get("node_id")):
                 logger.info("auto_merge_ready_pr=%s", number)
 
     async def create_proposal(self, proposal: Proposal) -> dict[str, Any]:
