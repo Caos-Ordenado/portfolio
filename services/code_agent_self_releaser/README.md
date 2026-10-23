@@ -44,6 +44,14 @@ image digest in `self-releaser.yaml` treats a **skipped** build as no release,
 while a missing/failed build remains an error. Repeat the smoke after updating
 the suspended CronJob; do not unsuspend based on the failed Job.
 
+On the first eligible instruction update, the controller's JSON Patch `test`
+against the full `AGENTS.md` value returned HTTP 422 on home MicroK8s despite
+matching GET bytes; no ConfigMap or Deployment changed. The revised patch tests
+the ConfigMap `resourceVersion` (which changes on any content write), replaces
+only `AGENTS.md`, then validates the returned value. This preserves optimistic
+concurrency without relying on the rejected full-text `test`. Re-run a
+supervised eligible instruction promotion before enabling recurrence.
+
 From `portfolio/`: run `python3 -m pytest -q services/code_agent_self_releaser/tests`,
 `actionlint .github/workflows/code-agent-{pr,build}.yml`,
 `kubectl kustomize k8s/code-agent` (the new overlay must NOT appear), and

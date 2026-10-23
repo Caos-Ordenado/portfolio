@@ -142,12 +142,12 @@ def test_config_read_and_patch_are_constrained():
             if method == "GET":
                 return 200, {}, json.dumps({"metadata": {"name": "open-terminal-agents", "namespace": "code-agent", "resourceVersion": "3"}, "data": {"AGENTS.md": "old"}}).encode()
             assert headers["Content-Type"] == "application/json-patch+json"
-            assert json.loads(data) == releaser.config_ops("3", "old", "new")
+            assert json.loads(data) == releaser.config_ops("3", "new")
             return 200, {}, json.dumps({"metadata": {"name": "open-terminal-agents", "namespace": "code-agent", "resourceVersion": "4"}, "data": {"AGENTS.md": "new"}}).encode()
 
     kube = releaser.Kube(Transport(), "kubernetes.default.svc", "443", "fake")
     assert releaser.config_snapshot(kube.read_config("open-terminal-agents"), "open-terminal-agents") == ("3", "old")
-    assert releaser.config_snapshot(kube.patch_config("open-terminal-agents", releaser.config_ops("3", "old", "new")), "open-terminal-agents") == ("4", "new")
+    assert releaser.config_snapshot(kube.patch_config("open-terminal-agents", releaser.config_ops("3", "new")), "open-terminal-agents") == ("4", "new")
     for bad in ({"metadata": {"name": "wrong", "namespace": "code-agent", "resourceVersion": "3"}, "data": {"AGENTS.md": "old"}},
                 {"metadata": {"name": "open-terminal-agents", "namespace": "other", "resourceVersion": "3"}, "data": {"AGENTS.md": "old"}}):
         with pytest.raises(releaser.ReleaseError):

@@ -210,9 +210,8 @@ def config_snapshot(obj, name):
         raise ReleaseError("invalid_config_map") from None
 
 
-def config_ops(rv, old, new):
+def config_ops(rv, new):
     return [{"op": "test", "path": "/metadata/resourceVersion", "value": rv},
-            {"op": "test", "path": "/data/AGENTS.md", "value": old},
             {"op": "replace", "path": "/data/AGENTS.md", "value": new}]
 
 
@@ -325,7 +324,7 @@ def restore(kube, applied, run_id):
                     continue
                 if value != new or (committed_rv is not None and rv != committed_rv):
                     raise ReleaseError("concurrent_rollback_change")
-                if config_snapshot(kube.patch_config(name, config_ops(rv, new, old)), name)[1] != old:
+                if config_snapshot(kube.patch_config(name, config_ops(rv, old)), name)[1] != old:
                     raise ReleaseError("unexpected_restore_result")
                 continue
             container, index, old, new, previous_marker, previous_restart, restart = details
@@ -384,7 +383,7 @@ def reconcile(gh, kube):
             if old != new:
                 record = ["config", name, old, new, rv, None]
                 applied.append(record)
-                patched_rv, patched_value = config_snapshot(kube.patch_config(name, config_ops(rv, old, new)), name)
+                patched_rv, patched_value = config_snapshot(kube.patch_config(name, config_ops(rv, new)), name)
                 record[5] = patched_rv
                 if patched_value != new:
                     raise ReleaseError("unexpected_config_patch_result")
