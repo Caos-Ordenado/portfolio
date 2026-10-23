@@ -62,3 +62,5 @@ For diagnosis without an explicit request to show logs, summarize relevant
 errors. Never put raw logs in a public PR or print the diagnostic bearer key.
 The existing public PR broker's allowlist still applies; diagnosing a service
 does not authorize submitting its files.
+
+For instruction self-updates, verify the releaser Job through cluster diagnostics before claiming the new instructions are active.
