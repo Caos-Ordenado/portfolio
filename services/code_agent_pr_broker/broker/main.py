@@ -1,5 +1,6 @@
 """Internal GitHub App PR broker for reviewed proposals and scoped self-updates."""
 # Self-update smoke: no behavior change.
+# Hosted build bootstrap: self-merge polling activates only after rollout.
 
 import asyncio
 import base64
