@@ -64,3 +64,4 @@ The existing public PR broker's allowlist still applies; diagnosing a service
 does not authorize submitting its files.
 
 For instruction self-updates, verify the releaser Job through cluster diagnostics before claiming the new instructions are active.
+After rollout_ready, confirm the mounted AGENTS.md reflects the reviewed commit before reporting completion.
