@@ -371,53 +371,110 @@ async def test_ready_bot_pr_requeues_only_allowlisted_source(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("branch,files,override,expected", [
-    ("agent/self-update/test", [{"filename": "services/code_agent_pr_broker/broker/main.py", "status": "modified"}], {}, True),
-    ("agent/self-update/test", [{"filename": "k8s/code-agent/terminal-AGENTS.md", "status": "modified"}], {}, True),
-    ("agent/self-update/test", [{"filename": PATH, "status": "modified"},
-                                {"filename": "k8s/code-agent/deployment.yaml", "status": "modified"}], {}, False),
-    ("agent/self-update/test", [{"filename": PATH, "previous_filename": ".github/workflows/a.yaml", "status": "modified"}], {}, False),
-    ("agent/self-update/test", [{"filename": PATH, "status": "removed"}], {}, False),
-    ("agent/self-update/test", [{"filename": PATH, "status": "modified"}], {"user": {"login": "other"}}, False),
-    ("agent/self-update/test", [{"filename": PATH, "status": "modified"}], {"head": {"sha": "e" * 40}}, False),
-    ("agent/self-update/test", [{"filename": PATH, "status": "modified"}], {"base": {"sha": "e" * 40}}, False),
-    ("agent/self-update/test", [{"filename": PATH, "status": "modified"}], {"draft": True}, False),
-    ("agent/review/test", [{"filename": PATH, "status": "modified"}], {}, False),
-    ("agent/openwebui-tools/test", [{"filename": "services/code_agent_pr_broker/broker/main.py", "status": "modified"}], {}, False),
+@pytest.mark.parametrize("change,expected", [
+    ({}, True),
+    ({"mergeable_state": "clean"}, True),
+    ({"files": [{"filename": "k8s/code-agent/terminal-AGENTS.md", "status": "added"}]}, True),
+    ({"check_status": "in_progress"}, False),
+    ({"conclusion": "failure"}, False),
+    ({"app_id": 42}, False),
+    ({"check_head": "e" * 40}, False),
+    ({"check_name": "other"}, False),
+    ({"total_count": 3}, False),
+    ({"check_runs": 1}, False),
+    ({"files": [{"filename": PATH, "status": "modified"},
+                {"filename": "k8s/code-agent/deployment.yaml", "status": "modified"}]}, False),
+    ({"files": [{"filename": PATH, "previous_filename": ".github/workflows/a.yaml", "status": "renamed"}]}, False),
+    ({"files": [{"filename": PATH, "status": "removed"}]}, False),
+    ({"files": [{"filename": PATH, "status": "modified"}] * 100}, False),
+    ({"user": {"login": "other"}}, False),
+    ({"head_sha": "e" * 40}, False),
+    ({"base_sha": "e" * 40}, False),
+    ({"live_base": "e" * 40}, False),
+    ({"draft": True}, False),
+    ({"mergeable_state": "dirty"}, False),
+    ({"branch": "agent/review/test"}, False),
+    ({"branch": "agent/openwebui-tools/test"}, False),
+    ({"listed_head_repo_id": None}, False),
+    ({"head_repo_id": 2}, False),
 ])
-async def test_poller_self_scope_and_fresh_state(monkeypatch, branch, files, override, expected):
+async def test_poller_self_rest_merge_guards(monkeypatch, change, expected):
+    head_sha = "f" * 40
+    branch = change.get("branch", "agent/self-update/test")
     pr = {"state": "open", "draft": False, "number": 1, "node_id": "PR_kwTest",
           "user": {"login": "home-lab-terminal-app[bot]"},
-          "head": {"ref": branch, "sha": "f" * 40, "repo": {"id": 1, "full_name": REPO}},
-          "base": {"ref": "main", "sha": BASE, "repo": {"id": 1, "full_name": REPO}}}
-    latest = {**pr, "mergeable_state": "clean", **override}
-    if "head" in override:
-        latest["head"] = {**pr["head"], **override["head"]}
-    if "base" in override:
-        latest["base"] = {**pr["base"], **override["base"]}
-    queued = []
-    async with httpx.AsyncClient() as client:
+          "head": {"ref": branch, "sha": head_sha,
+                   "repo": {"id": change.get("listed_head_repo_id", 1), "full_name": REPO}},
+          "base": {"ref": "main", "sha": BASE,
+                   "repo": {"id": change.get("listed_head_repo_id", 1), "full_name": REPO}}}
+    latest = {**pr, "mergeable_state": change.get("mergeable_state", "blocked"),
+              "draft": change.get("draft", False), "user": change.get("user", pr["user"]),
+              "head": {**pr["head"], "sha": change.get("head_sha", head_sha),
+                       "repo": {"id": change.get("head_repo_id", 1), "full_name": REPO}},
+              "base": {**pr["base"], "sha": change.get("base_sha", BASE)}}
+    files = change.get("files", [{"filename": "services/code_agent_pr_broker/broker/main.py", "status": "modified"}])
+    runs = [{"name": name, "status": change.get("check_status", "completed"),
+             "conclusion": change.get("conclusion", "success"), "head_sha": change.get("check_head", head_sha),
+             "app": {"id": change.get("app_id", 15368)}} for name in ("checks", change.get("check_name", "self-checks"))]
+    calls = []
+
+    def respond(req):
+        assert req.url.host == "api.github.com"
+        assert req.headers["authorization"] == "Bearer test-token"
+        calls.append((req.method, str(req.url), json.loads(req.content) if req.content else None))
+        path = req.url.path
+        if path.endswith("/pulls") and req.method == "GET":
+            data = [pr]
+        elif path.endswith("/pulls/1/files"):
+            data = files
+        elif path.endswith("/pulls/1") and req.method == "GET":
+            data = latest
+        elif path.endswith(f"/commits/{head_sha}/check-runs"):
+            data = {"total_count": change.get("total_count", 2), "check_runs": runs[:change.get("check_runs", 2)]}
+        elif path.endswith("/git/ref/heads/main"):
+            data = {"object": {"sha": change.get("live_base", BASE)}}
+        elif path.endswith("/pulls/1/merge") and req.method == "PUT":
+            data = {"merged": True}
+        else:
+            pytest.fail(f"unexpected GitHub call: {req.method} {path}")
+        return httpx.Response(200, json=data)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         github = GitHub(client)
 
         async def token():
             return "test-token"
 
-        async def listing(path, _token):
-            return [pr] if "/pulls?" in path else files
-
-        async def detail(_method, _path, _token):
-            return latest
-
-        async def queue(_token, _node_id):
-            queued.append(True)
-            return True
-
         monkeypatch.setattr(github, "installation_token", token)
-        monkeypatch.setattr(github, "request_list", listing)
-        monkeypatch.setattr(github, "request", detail)
-        monkeypatch.setattr(github, "request_auto_merge", queue)
         await github.retry_ready_auto_merges()
-    assert bool(queued) is expected
+    merges = [(method, url, payload) for method, url, payload in calls if method == "PUT"]
+    assert bool(merges) is expected
+    assert not any("/graphql" in url for _, url, _ in calls)
+    if expected:
+        assert ("GET", f"https://api.github.com{ROOT}/commits/{head_sha}/check-runs?per_page=100", None) in calls
+        assert ("GET", f"https://api.github.com{ROOT}/git/ref/heads/main", None) in calls
+        assert merges == [("PUT", f"https://api.github.com{ROOT}/pulls/1/merge",
+                           {"sha": head_sha, "merge_method": "squash"})]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,data", [(403, {"message": "private content"}), (200, {"merged": False})])
+async def test_self_merge_failure_is_not_reported_as_success(status, data):
+    def respond(req):
+        if req.url.path.endswith("/pulls/1/merge"):
+            return httpx.Response(status, json=data)
+        if req.url.path.endswith("/check-runs"):
+            return httpx.Response(200, json={"total_count": 2, "check_runs": [
+                {"name": name, "status": "completed", "conclusion": "success",
+                 "head_sha": "f" * 40, "app": {"id": 15368}} for name in ("checks", "self-checks")]})
+        if req.url.path.endswith("/git/ref/heads/main"):
+            return httpx.Response(200, json={"object": {"sha": BASE}})
+        pytest.fail("unexpected request")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        with pytest.raises(UpstreamError) as exc:
+            await GitHub(client).merge_ready_self_pr("test-token", 1, "f" * 40, BASE)
+    assert "private content" not in str(exc.value)
 
 
 @pytest.mark.asyncio
