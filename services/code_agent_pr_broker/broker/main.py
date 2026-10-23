@@ -1,4 +1,5 @@
 """Internal GitHub App PR broker for reviewed proposals and scoped self-updates."""
+# Self-update smoke: no behavior change.
 
 import asyncio
 import base64
