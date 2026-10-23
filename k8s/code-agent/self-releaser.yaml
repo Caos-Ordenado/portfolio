@@ -75,7 +75,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: releaser
-              image: docker.io/library/code-agent-self-releaser@sha256:4d57342bf2efd0cc84da7ff006c7a4f43c3c16a4f60f54c1862c11c93f313e44
+              image: docker.io/library/code-agent-self-releaser@sha256:c5a35714b0cceac6f4349a89d22da8e36ce6111a7ccb5d92ff931237aacef889
               imagePullPolicy: Never
               securityContext:
                 readOnlyRootFilesystem: true
