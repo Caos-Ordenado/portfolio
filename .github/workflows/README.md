@@ -1,4 +1,40 @@
-# openwebui-tools CI / GHCR build pilot
+# Portfolio hosted CI / GHCR trusted builds
+
+## Code-agent self-update lane (live)
+
+Portfolio `main` requires PRs with strict `checks` and `self-checks` from
+GitHub Actions App 15368, admin enforced. The review-only portfolio ruleset
+allows the owner and Integration App 5113000 to bypass review. **This applies
+to all portfolio App PRs**, not just `agent/self-update/`; never promise manual
+review as a merge gate for App-authored portfolio changes. Private `infra`
+remains review-only with owner-only bypass. Bot self-update PRs are limited by
+the broker's own-stack full-path allowlist; its poller verifies the unchanged
+head and current base, two completed successful head-bound Actions checks, then
+uses App REST squash merge if GitHub leaves queued auto-merge `REVIEW_REQUIRED`.
+An actual App PR #53 on tracked terminal instructions merged without reviews
+after both checks. Hosted run `40003940789` gate/verify/build passed; three
+anonymous GHCR digests matched the run-bound commit statuses. The supervised
+controller promoted main `87d3…` and reported `rollout_ready`; four Deployments
+were 1/1 with both mounted instruction ConfigMaps matching main. Verify live
+state rather than treating a successful hosted build as proof of deployment.
+
+The build gate accepts only own-stack Python source/tests and tracked terminal
+instructions on a whole main push. Dockerfiles, RBAC, network, workflows,
+controller manifests and private infra remain owner-managed trust roots.
+The workflows archive Dockerfiles and the broker lockfile from their fixed
+reviewed `TRUSTED_BUILD_BASE`, not an App PR. Changes outside the build gate
+can skip `verify` and `build`; `no_eligible_build` is a successful no-op, not
+a failed rollout. The separate `code-agent-self-releaser` CronJob is live every
+10 minutes in `code-agent` with a locally imported pinned image; the checked-in
+`k8s/code-agent/self-releaser.yaml` still has `suspend: true` and must not be
+reapplied without reconciling live state. `run_already_attempted` is another
+successful no-op. For real rollout and recovery checks see
+`services/code_agent_self_releaser/README.md`; suspend that CronJob first on
+release failure, and revoke the App portfolio review bypass if disabling
+autonomous merges. The accepted shared App PEM can technically request private
+infra tokens; code-level repository scoping is not credential isolation.
+
+## openwebui-tools lane
 
 PR checks run on GitHub-hosted
 `ubuntu-latest` without secrets or cluster access. They compile service/shared
@@ -26,9 +62,10 @@ separate in-cluster controller's GitHub run polling.
 
 The private PR broker (`services/code_agent_pr_broker/`) uses the scoped
 `home-lab-terminal-app` installation token to create source-only PRs and request
-squash auto-merge. Protected `main` requires `checks` for every PR. A separate
-review-only GitHub ruleset requires an owner review for App-authored PRs, while
-`Caos-Ordenado` may bypass that ruleset when merging their own PRs. The App
+squash auto-merge. Protected `main` requires `checks` and `self-checks` for every
+PR. The portfolio review-only GitHub ruleset permits the owner **and App** to
+bypass review; legacy App source-only PRs no longer have a guaranteed owner
+review gate. The App
 key stays in the broker,
 not in chat, the terminal, or GitHub Actions. The previous
 `pull_request_target` request workflow was removed: GitHub denies its minimal
@@ -37,12 +74,11 @@ with `GITHUB_TOKEN` would not reliably trigger the downstream push workflow.
 
 ## Trust and release configuration
 
-1. Protect `main`: require PRs and `checks` in branch protection for every
-   actor, including admins. In a separate review-only ruleset targeting `main`,
-   require one review and CODEOWNER approval, with only `Caos-Ordenado` (user ID
-   130296975) permitted to bypass the ruleset on pull requests. The GitHub App
-   must not bypass it. This lets the owner merge their own PR after `checks`
-   while preserving the App PR review gate. Retain CODEOWNERS, prohibit
+1. Protect `main`: require PRs and strict `checks` and `self-checks` from Actions
+   App 15368 for every actor, including admins. The separate portfolio review-only
+   ruleset requires review and CODEOWNER approval but currently allows the owner
+   and Integration App 5113000 to bypass it. Private infra retains owner-only
+   bypass. Retain CODEOWNERS, prohibit
    direct/force pushes and restrict workflow edits. The source-only gate is not
    a sandbox: a reviewed workflow or base
    image change can affect later trusted builds. Keep the Dockerfile base image
@@ -80,22 +116,19 @@ with `GITHUB_TOKEN` would not reliably trigger the downstream push workflow.
     deploy. No self-hosted runner or GitHub kubeconfig is needed. Home MicroK8s
     runs `RBAC,Node`; the releaser identity was verified to be denied Secrets,
     pod exec, lists and other Deployments. Recheck after RBAC changes. The
-    The one-shot rollout and manual rollback drill passed; the reviewed
+    one-shot rollout and manual rollback drill passed; the reviewed
     `k8s/openwebui_tools/releaser.yaml` enables recurrence after separate owner
     approval. Check its effective RBAC and every scheduled Job.
 
-### Review-rule migration
+### Review-rule operational boundary
 
-Create and verify the review-only ruleset **before** lowering GitHub's global
-approval count to zero. The ruleset bypass is `pull_request` for user
-`Caos-Ordenado` only; it does not bypass branch protection's `checks`, PR-only
-merge, admin enforcement or conversation resolution. After the ruleset is
-active, lower only the redundant branch-protection approval count to zero
-and disable its CODEOWNER requirement (retaining PR-only merge). Confirm a checked
-owner-authored PR merges without a second reviewer, and an unapproved App PR
-remains blocked until the owner approves its current head. If the ruleset
-does not enforce that boundary, restore the branch-protection review requirement and
-leave the new broker inactive pending correction.
+The portfolio App bypass is already live; a checked App PR may merge without
+owner review. It does not remove protected-branch PR/strict check enforcement.
+Do not copy this exception to private infra. If autonomous portfolio merges
+must stop, revoke the App's portfolio review-only ruleset bypass and disable
+the broker poller/callers with operator authorization; suspending the controller
+alone prevents deployment, not merges. Verify settings and a fresh check result
+before restoring autonomous operation.
 
 ## Rollout and recovery
 
