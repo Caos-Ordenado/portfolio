@@ -1,5 +1,10 @@
 # Open Terminal pilot (home MicroK8s only)
 
+**For current operation across public `portfolio` and private `infra`, start
+with [OPERATIONS.md](OPERATIONS.md).** This README also retains original
+bootstrap/legacy pilot instructions; compare current live state before any
+apply, because several checked-in manifests deliberately differ from it.
+
 Phase 2 private `infra` review is live internally with a separate owner-configured
 WebUI system connection. Its zero-replica-by-default manifests and operator
 runbook are in [infra-review/README.md](infra-review/README.md); the two private

@@ -1,5 +1,8 @@
 # Portfolio hosted CI / GHCR trusted builds
 
+For the complete public/privately reviewed agent workflows and live-versus-git
+drift, start with [`k8s/code-agent/OPERATIONS.md`](../../k8s/code-agent/OPERATIONS.md).
+
 ## Code-agent self-update lane (live)
 
 Portfolio `main` requires PRs with strict `checks` and `self-checks` from

@@ -24,7 +24,24 @@ The broker rechecks open PRs every 60 seconds using complete, bounded pagination
 
 The owner explicitly accepted that autonomous broker code can read the shared GitHub App PEM and technically request a token for private `infra`; repository-scoped requests in this code do not isolate an unreviewed future broker image from that credential. Never present private-repository access as prevented by the current shared-App design.
 
-The independent, exact path allowlist is Python `.py` files under `services/openwebui_tools/src/`, `services/code_agent_pr_broker/broker/`, `services/cluster_diagnostics/diagnostics/`, and corresponding service `tests/` directories (tests alone do not deploy), plus exactly `k8s/code-agent/terminal-AGENTS.md` and `k8s/code-agent/infra-review/infra-terminal-AGENTS.md`. `k8s/code-agent/Dockerfile` is **not** allowed: arbitrary build instructions cannot be safely screened by the broker. Manifests, release controllers, `.github/`, secrets, other services and private infra are not eligible. Size/text/duplicate-path, complete-tree, no-op and symlink protections match review proposals. The poller independently checks the entire bounded file list (including rename origins) of App-authored same-repo self-update PRs; it requires added/modified files, a fresh unchanged head/base, a non-draft PR and `mergeable_state` of `clean` or `blocked`. Before REST merge it requires exactly two completed successful check runs named `checks` and `self-checks` from GitHub Actions App ID 15368 for the same head SHA, then re-reads live main and requires the same base SHA. The merge uses the expected head SHA and squash method; any mismatch prevents the merge request, and GitHub failures are reported generically without assuming a merge succeeded. Legacy `agent/openwebui-tools/` path eligibility is unchanged. The public broker is live at GHCR digest `sha256:c17f9…`; an actual App PR #53 changing tracked terminal instructions merged without reviews after both checks. The broker's `GET /health` checks only process liveness, not GitHub permissions, checks, merge eligibility or controller rollout. If autonomous merge must stop, revoke the portfolio App review-only ruleset bypass and disable broker callers/poller under operator control; suspending the cluster releaser alone does not prevent merges. Never send a write request as a health probe.
+The independent, exact self-update allowlist covers `.py` under
+`services/openwebui_tools/src/`, `services/code_agent_pr_broker/broker/`,
+`services/cluster_diagnostics/diagnostics/` and their corresponding `tests/`,
+plus exactly the two tracked terminal instruction files in `k8s/code-agent/`.
+**A broker/diagnostics tests-only push can still publish images and release;**
+`openwebui_tools/tests/` alone does not trigger either release workflow.
+Dockerfiles, deployment/RBAC/network manifests, release controllers,
+`.github/`, secrets, other services and private infra are excluded. The broker
+checks size/text/duplicates, complete GitHub tree, no-op and symlink targets.
+
+The poller rechecks the entire bounded file list (including rename origins),
+App author, same-repo head/base, current main and exactly two successful
+head-bound GitHub Actions check runs (`checks` and `self-checks`, App ID 15368).
+It then makes an App REST squash-merge request for that head. Legacy
+`agent/openwebui-tools/` eligibility is unchanged. `GET /health` proves only
+process liveness; do not send a write request as a health probe. For the full
+PR/build/controller flow and rollback, see
+[`k8s/code-agent/OPERATIONS.md`](../../k8s/code-agent/OPERATIONS.md).
 
 ## Manual review proposals (phase 2)
 

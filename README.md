@@ -103,6 +103,14 @@ This live site showcases the infrastructure and provides links to:
 
 ## 🏗️ Architecture Highlights
 
+### OpenWebUI coding agents
+
+The public coding agent can submit bounded own-stack PRs, pass required hosted
+checks, auto-merge and roll out through a scoped home MicroK8s controller. A
+separate terminal prepares **private** `infra` PRs that still require owner
+review and manual deployment. See the [end-to-end operator guide](k8s/code-agent/OPERATIONS.md)
+for identities, diagnostics, drift, rollback and the private snapshot refresh.
+
 ### 1. Web Crawler Service
 - Async Python + FastAPI architecture
 - PostgreSQL persistence with caching
@@ -259,4 +267,3 @@ For professional inquiries:
 - LinkedIn: https://www.linkedin.com/in/nelson-fabian-rey-5177027/
 - Upwork: https://www.upwork.com/freelancers/fabianr10
 - Website: https://reyops.com
-
