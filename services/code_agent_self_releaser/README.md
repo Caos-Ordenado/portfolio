@@ -1,5 +1,9 @@
 # Code-agent trusted image promotion (live, home MicroK8s)
 
+Start with the cross-repository [end-to-end operations guide](../../k8s/code-agent/OPERATIONS.md)
+for the public and private agent lifecycles. This file covers the controller in
+detail; inspect live state before using historical rollout examples below.
+
 This controller reads only the latest successful `code-agent-build.yml` push run
 for the **current** main SHA, its `build` job, commit statuses bound to that run,
 and the anonymous GHCR tag digest. It fetches both tracked terminal instruction
@@ -31,6 +35,9 @@ terminal instruction files for a whole push, with no mixed workflow/manifest
 changes. Reviewed Dockerfiles and the broker lockfile are archived from the
 fixed `TRUSTED_BUILD_BASE` named in both trusted workflows, never from a bot PR;
 update that base only through a reviewed workflow change.
+Even a broker/diagnostics tests-only eligible push can rebuild all three images
+and trigger a rollout of the four named Deployments. A push touching only
+`services/openwebui_tools/tests/` is not eligible for either release workflow.
 It publishes all three immutable images for that exact SHA; the controller
 refuses skipped, pending, failed, stale or mismatched runs/statuses. GHCR images
 must be publicly anonymously readable. Existing openwebui-tools workflow is

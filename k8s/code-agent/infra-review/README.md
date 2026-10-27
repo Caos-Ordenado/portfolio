@@ -1,17 +1,26 @@
-# Phase 2: private infra review (staged, not connected to WebUI)
+# Private infra review (live terminal; PRs remain owner-reviewed)
+
+Read [../OPERATIONS.md](../OPERATIONS.md) first for the current public/private
+flow and deliberate differences between live resources and these bootstrap
+manifests. As checked on 2026-10-26, the mounted audited snapshot is **stale**
+relative to private `infra/main`; the broker rejects proposals with 409 until
+an operator refreshes the filtered snapshot and SHA marker. Preserve any
+existing `infra/` feature branch and use a clean `main` worktree for export.
 
 This is a **standalone** overlay for the existing `code-agent` namespace, absent
 from `../kustomization.yaml` and the portfolio root. Both Deployments default to
-**zero replicas** in git. After reviewed PR #35 merged, the overlay was applied
+**zero replicas** in git, while both live Pods are 1/1; reapplying this overlay
+would scale them down. After reviewed PR #35 merged, the overlay was applied
 to home MicroK8s and the two private workloads were manually scaled to one for
 isolated testing. The pinned pilot-6 image was verified on caos; repository-scoped
 authorization, denied cross-broker ingress, terminal DNS/public egress, and the
 curated snapshot's 45 Git blobs were tested. The owner subsequently added a
 separate WebUI connection; do not broaden its admin-only access. Confirm
 retention and model data handling for private source in the running WebUI.
-No new Kubernetes deployer, public
-auto-deploy, direct git push, Ingress, IngressRoute, Traefik prefix, NodePort or
-LoadBalancer is included. Existing portfolio terminal/broker stay unchanged.
+No private-infra Kubernetes deployer, auto-deploy, direct git push, Ingress,
+IngressRoute, Traefik prefix, NodePort or LoadBalancer is included. The separate
+public portfolio self-releaser may promote this **terminal image/instructions**
+but cannot deploy changes to the `infra` repository's workloads.
 
 `infra-terminal.code-agent.svc.cluster.local:8000` is ClusterIP-only, with
 ingress from `default`/`app=openwebui` on 8000 and egress **only** to
@@ -38,21 +47,22 @@ diagnostic HTTP key after that overlay's approved rollout. It does not receive t
 GitHub App PEM or IDs. The broker references existing `code-agent-github-app`
 keys `APP_ID`, `INSTALLATION_ID`, and `private-key.pem`, mounted read-only; no
 Secret value is stored in this repo or a ConfigMap. Never grant the terminal
-Kubernetes API access. The hardened terminal image is built from `../Dockerfile`
-and pinned to its verified locally imported digest with `imagePullPolicy: Never`;
-the broker image is pinned to the locally imported pilot-6 review digest.
+Kubernetes API access. The checked-in terminal manifest still pins a locally
+imported image with `Never`, but the live terminal uses a newer hosted GHCR
+digest and `IfNotPresent` promoted by the public self-releaser. The private
+broker remains pinned to the locally imported pilot-6 review digest. Never
+reapply the older terminal manifest over a controller-managed live image.
 
-## Access blockers / contract before connecting WebUI
+## Contract before a fresh installation or snapshot refresh
 
-- Review and verify the broker's staged `REVIEW_REPOSITORY=infra` fail-closed mode;
+- Review and verify the broker's live `REVIEW_REPOSITORY=infra` fail-closed mode;
   reject unsupported values, verify submitted base commit against the operator's
   expected snapshot SHA, confine proposals to the intended private repository,
   prevent public PRs and deployment, and reject portfolio requests. Verify the
   imported image digest matches this manifest **before** increasing
   replicas. Review/write mode must remain subject to human approval; do not
-  attach a Kubernetes deployer. The snapshot-SHA handoff is specified here but
-  must be implemented and verified in the new broker image; do not activate on
-  the strength of an archive checksum alone. The broker reads
+  attach a Kubernetes deployer. The broker implements and has exercised the
+  snapshot-SHA handoff; do not trust an archive checksum alone. It reads
   `REVIEW_SNAPSHOT_SHA` from operator-created `infra-review-snapshot` ConfigMap
   key `MAIN_SHA`; the terminal sees a separate read-only projected SHA marker
   at `/run/review-snapshot/MAIN_SHA`. The marker is not a trust anchor for PVC
@@ -62,9 +72,8 @@ the broker image is pinned to the locally imported pilot-6 review digest.
   to its own repository (`infra` for review, `portfolio` for public proposals),
    with minimum required permissions. Do not issue an installation-wide token.
    If a separate App credential is required, revise Secret references and
-   rotation plan first. Phase 2 broker source and image are staged; its
-   deployments remain inactive until the reviewed PR is merged and rollout
-   prerequisites are met.
+   rotation plan first. The private broker and terminal are live at 1/1;
+   PRs still require owner review and have no automatic infra deployment.
 - Require explicit owner approval for private code in a public-facing Open
   WebUI process: prompts, responses, terminal output, broker logs, models and
   PVC backups can leak source. Confirm WebUI's effective admin-only connection
@@ -75,7 +84,11 @@ the broker image is pinned to the locally imported pilot-6 review digest.
   approved rollback before activation. TCP readiness alone does not verify
   isolation, repo authorization or review-only operation.
 
-## Staged operator procedure (only AFTER blockers are resolved)
+## Fresh-install / snapshot-refresh procedure (not routine reconciliation)
+
+These commands describe initial staging. **Do not apply the zero-replica
+overlay or overwrite the live PVC/ConfigMaps while the owner is using the
+terminal.** For refresh, use the controlled stop-and-replace sequence below.
 
 1. From `portfolio/`, check `kubectl config current-context` targets **home
    MicroK8s**, `kubectl get pods -n kube-system --show-labels` matches CoreDNS,
@@ -85,9 +98,13 @@ the broker image is pinned to the locally imported pilot-6 review digest.
    `kubectl kustomize k8s/code-agent/infra-review` and optionally, on the
    confirmed home context, `kubectl apply --dry-run=client -k k8s/code-agent/infra-review`.
    Do not apply the parent overlay, which manages the portfolio pilot.
- 2. From the Mac, obtain approval to snapshot **private infra main**. Check
-   `git -C ../infra status --porcelain=v1 --untracked-files=all` is **empty**,
-   `git -C ../infra branch --show-current` is `main`, and HEAD is the audited
+ 2. From the Mac, obtain approval to snapshot **private infra main**. If
+    `../infra` is on a feature branch, preserve it and set `INFRA_REPO` to a
+    separate clean `main` worktree; never switch an active checkout. Set
+    `INFRA_REPO` to that worktree path (or `INFRA_REPO=../infra` only when the
+    sibling checkout really is clean, current `main`). Check
+    `git -C "$INFRA_REPO" status --porcelain=v1 --untracked-files=all` is **empty**,
+    `git -C "$INFRA_REPO" branch --show-current` is `main`, and HEAD is the audited
     main commit (the exporter compares HEAD with `origin/main`; verify remote
     provenance separately). Audit the **allowlisted tracked contents** for
     credentials or material unsafe for the model, including tokens embedded in
@@ -103,11 +120,13 @@ the broker image is pinned to the locally imported pilot-6 review digest.
 
    ```sh
     umask 077
-    mkdir -m 700 "$HOME/.local/share/openwebui-agent/infra-snapshots"
-    python3 k8s/code-agent/infra-review/create-snapshot.py ../infra \
-      "$HOME/.local/share/openwebui-agent/infra-snapshots"
-    # Set SNAP_DIR to the printed snapshot_dir after reviewing its path.
-    MAIN_SHA=$(git -C ../infra rev-parse HEAD)
+     if [ ! -d "$HOME/.local/share/openwebui-agent/infra-snapshots" ]; then
+       mkdir -m 700 "$HOME/.local/share/openwebui-agent/infra-snapshots"
+     fi
+     python3 k8s/code-agent/infra-review/create-snapshot.py "$INFRA_REPO" \
+       "$HOME/.local/share/openwebui-agent/infra-snapshots"
+     # Set SNAP_DIR to the printed snapshot_dir after reviewing its path.
+     MAIN_SHA=$(git -C "$INFRA_REPO" rev-parse HEAD)
     SNAPSHOT="$SNAP_DIR/snapshot.tar"
     MANIFEST="$SNAP_DIR/ls-tree.bin"
     shasum -a 256 "$SNAPSHOT"
@@ -143,11 +162,12 @@ the broker image is pinned to the locally imported pilot-6 review digest.
    provisions the private PVC and services while leaving both replicas at 0.
     Keep **both at 0** until the review-only broker code and pinned image are
     verified against the imported local digest before scaling it.
-   Only then set broker replicas to 1, re-render/apply, and check
+    Only then scale broker replicas to 1 and check
    `kubectl -n code-agent rollout status deployment/infra-pr-broker --timeout=300s`.
    Confirm absent/mismatched snapshot SHA, public PR publication and portfolio
    submissions are refused before connecting the terminal.
-4. Set terminal replicas to 1 in the reviewed manifest, re-render/apply and
+ 4. Scale terminal replicas to 1 with `kubectl -n code-agent scale
+    deployment/infra-terminal --replicas=1` and
    check `kubectl -n code-agent rollout status deployment/infra-terminal
    --timeout=300s`. Check that `INFRA_PR_BROKER_SERVICE_HOST` was injected;
    if missing, scale back to 0, create/check broker Service, then recreate the
@@ -171,32 +191,54 @@ the broker image is pinned to the locally imported pilot-6 review digest.
    ```sh
    kubectl -n code-agent exec "$POD" -- tar -xf /home/user/infra-snapshot.tar -C /home/user/infra
    kubectl -n code-agent exec -i "$POD" -- python3 - /home/user/infra /home/user/infra-ls-tree.bin < k8s/code-agent/infra-review/verify-snapshot.py
-   kubectl cp k8s/code-agent/infra-review/infra-terminal-AGENTS.md "code-agent/$POD:/home/user/AGENTS.md"
-   kubectl -n code-agent exec "$POD" -- rm /home/user/infra-snapshot.tar /home/user/infra-ls-tree.bin
-   ```
+    kubectl -n code-agent exec "$POD" -- rm /home/user/infra-snapshot.tar /home/user/infra-ls-tree.bin
+    ```
 
-   Do not enable the WebUI connection until blob verification succeeds. Remove
-   the Mac scratch files after operator-retention needs are met. On **every
-   refresh**, first disable the WebUI connection, scale **both** Deployments to
-   zero and wait for pods to terminate. Audit a fresh clean main commit; retain
-   a secure private backup only if needed, remove the old extracted tree and
-   staging files deliberately (never reuse or merge directories), replace the
-   operator-controlled ConfigMap with the newly audited `MAIN_SHA` (with both
-   Deployments stopped: `kubectl -n code-agent delete configmap infra-review-snapshot`
-   then `kubectl -n code-agent create configmap infra-review-snapshot
-   --from-literal=MAIN_SHA="$MAIN_SHA"`), and restart
-   only the reviewed workloads to create a **new empty** `/home/user/infra`.
-   Copy/check/extract/verify the new archive as above **before** reconnecting
+    The effective `/home/user/AGENTS.md` is a **read-only** mount from
+    `infra-terminal-agents`, maintained by the public self-releaser. Do not
+    `kubectl cp` over it or overwrite the original PVC file. Do not enable
+    the WebUI connection until blob verification succeeds. Remove the Mac
+    scratch files after operator-retention needs are met.
+
+    On **every refresh**, first disable the private WebUI connection and
+    suspend the separate `code-agent-self-releaser` CronJob; wait for any
+    active release Job to finish and record whether it was previously running.
+    It may otherwise restart the terminal during snapshot replacement. Scale
+    `infra-pr-broker` to zero and wait for its Pod to terminate. Audit a fresh
+    clean `main` and make any needed
+    private out-of-git backup of `/home/user/infra` **before deleting it**.
+    With broker stopped and WebUI connection disabled, the existing terminal
+    Pod is the controlled PVC access path: only after the owner has reviewed
+    user edits/backups, run `kubectl -n code-agent exec deployment/infra-terminal
+    -- rm -r /home/user/infra`. If no safe backup/cleanup decision exists,
+    **stop**; never merge a new archive into an old tree. Then scale
+    `infra-terminal` to zero and wait for termination. With **both** workloads
+    stopped, replace `infra-review-snapshot` deliberately:
+
+    ```sh
+    kubectl -n code-agent delete configmap infra-review-snapshot
+    kubectl -n code-agent create configmap infra-review-snapshot --from-literal=MAIN_SHA="$MAIN_SHA"
+    kubectl -n code-agent scale deployment/infra-pr-broker --replicas=1
+    kubectl -n code-agent rollout status deployment/infra-pr-broker --timeout=300s
+    kubectl -n code-agent scale deployment/infra-terminal --replicas=1
+    kubectl -n code-agent rollout status deployment/infra-terminal --timeout=300s
+    ```
+
+    Recreate an **empty** `/home/user/infra`, copy/check/extract/verify the new
+    curated archive as above **before** reconnecting
    WebUI or allowing proposals. Ensure the broker reads the same SHA after its
-   restart. Stop on any failure; never trust modified PVC contents as baseline.
+    restart. Resume the self-releaser only if it was previously running and
+    after private verification succeeds. Stop on any failure; never trust
+    modified PVC contents as baseline.
    No private source or PEM belongs in ConfigMaps, logs or tickets.
 5. In the existing public Open WebUI add an **administrator-only system**
    Open Terminal connection to `http://infra-terminal.code-agent.svc.cluster.local:8000`
    with the separate terminal key. Keep it disabled and grant **no default,
    shared or non-admin access**. Before first use, use an approved non-admin
-   account to negatively test both listing and invoking the connection (and
-   test pending accounts); remove/disable the connection immediately on any
-   access. Enable only for the approved admin after denial is proven. Do not
+    account to negatively test both listing and invoking the connection (and
+    test pending accounts) **if such accounts exist**; remove/disable the
+    connection immediately on any unauthorized access. Enable only for the
+    approved admin after applicable denial is proven. Do not
    expose a broker tool/endpoint directly in WebUI. Test a read-only admin
    review and verify no PR, deployment or public artifact is produced.
 
